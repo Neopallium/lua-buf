@@ -16,10 +16,9 @@ dependencies = {
 	'lua >= 5.1',
 }
 build	= {
-	type = "builtin",
-	modules = {
-		buf = {
-			sources = { "src/pre_generated-buf.nobj.c" },
-		}
-	}
+	type = "cmake",
+	variables = {
+	CMAKE_INSTALL_PREFIX = "$(LUAROCKS_PREFIX)",
+	INSTALL_CMOD = "$(LUAROCKS_PREFIX)/lib/lua/5.1",
+},
 }
