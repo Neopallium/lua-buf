@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define MIN_BUFFER_SIZE 512
+#define MIN_BUFFER_COMPACT_SIZE 96
 
 #define L_BUFFER_LENGTH(buf) ((buf)->head - (buf)->tail)
 
@@ -62,15 +63,6 @@ static bool l_buffer_resize_internal(LBuffer *buf, size_t size) {
 	return true;
 }
 
-L_INLINE bool l_buffer_grow_head(LBuffer *buf, size_t len) {
-	size_t head = buf->head + (len);
-	if(head > buf->size) {
-		l_buffer_resize_internal((buf), head);
-	}
-	buf->head = head;
-	return true;
-}
-
 static void l_buffer_cleanup(LBuffer *buf) {
 	if(buf == NULL) return;
 	if(buf->data) free(buf->data);
@@ -97,10 +89,28 @@ size_t l_buffer_length(LBuffer *buf) {
 	return L_BUFFER_LENGTH(buf);
 }
 
+L_INLINE bool l_buffer_grow_space(LBuffer *buf, size_t new_size) {
+	size_t tail = buf->tail;
+	/* first try to compact buffer. */
+	if(tail > MIN_BUFFER_COMPACT_SIZE) {
+		size_t head = buf->head;
+		memmove(buf->data, buf->data + tail, head - tail);
+		/* down shift head/tail offsets. */
+		buf->tail = 0;
+		buf->head = head - tail;
+		/* do we have enough space now? */
+		if((new_size - tail) < buf->size) {
+			/* we freed up enough space, don't need to grow the buffer. */
+			return true;
+		}
+	}
+	return l_buffer_resize_internal(buf, new_size);
+}
+
 bool l_buffer_set_length(LBuffer *buf, size_t len) {
 	size_t head = (buf)->tail + len;
 	if L_UNLIKELY(head > buf->size) {
-		if(!l_buffer_resize_internal(buf, head)) { return false; }
+		if L_UNLIKELY(!l_buffer_grow_space(buf, head)) { return NULL; }
 	}
 	buf->head = head;
 	return true;
@@ -114,9 +124,9 @@ L_INLINE uint8_t *l_buffer_get_tail(LBuffer *buf, size_t need) {
 }
 
 L_INLINE uint8_t *l_buffer_get_head(LBuffer *buf, size_t need) {
-	size_t new_head = buf->head + need;
-	if L_UNLIKELY(new_head > buf->size) {
-		if L_UNLIKELY(!l_buffer_resize_internal(buf, new_head)) { return NULL; }
+	size_t head = buf->head + need;
+	if L_UNLIKELY(head > buf->size) {
+		if L_UNLIKELY(!l_buffer_grow_space(buf, head)) { return NULL; }
 	}
 	return buf->data + buf->head;
 }
