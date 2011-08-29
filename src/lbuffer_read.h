@@ -9,6 +9,8 @@
 
 #define L_BUFFER_NUM_PARSE_ERROR (-1000)
 
+L_LIB_API const uint8_t *l_buffer_read_data_len(LBuffer *buf, size_t len);
+
 /**
  * Read an 8-bit binary big-endian integer.
  *

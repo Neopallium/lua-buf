@@ -38,6 +38,8 @@ struct LBuffer {
 
 uint8_t *l_buffer_sub(LBuffer *buf, size_t off, size_t *plen);
 
+const uint8_t *l_buffer_read_data_len(LBuffer *buf, size_t len);
+
 ]],
 		ffi_source[[
 local LBuffer_tmp = ffi.new("LBuffer")
@@ -121,6 +123,18 @@ local sub_len_tmp = ffi.new("size_t[1]")
 	},
 
 	--[[ Read methods. ]]
+	method "read_data" {
+		var_in{ "size_t", "len" },
+		var_out{ "const char *", "data", has_length = true },
+		c_source[[
+	${data} = l_buffer_read_data_len(${this}, ${len});
+	${data_len} = ${len};
+]],
+		ffi_source[[
+	${data} = C.l_buffer_read_data_len(${this}, ${len});
+	${data_len} = ${len};
+]],
+	},
 	method "read_uint8" {
 		c_method_call "int>2" "l_buffer_read_uint8_t" { "uint8_t", "&num>1" }
 	},
@@ -165,6 +179,9 @@ local sub_len_tmp = ffi.new("size_t[1]")
 	},
 
 	--[[ Append methods. ]]
+	method "append_data" {
+		c_method_call "int" "l_buffer_append_data_len" { "const char *", "data", "size_t", "#data" }
+	},
 	method "append_uint8" {
 		c_method_call "int" "l_buffer_append_uint8_t" { "uint8_t", "num" }
 	},

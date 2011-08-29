@@ -28,6 +28,17 @@
 	(buf)->tail = tail; \
 } while(0)
 
+const uint8_t *l_buffer_read_data_len(LBuffer *buf, size_t len) {
+	uint8_t *data;
+
+	/* make sure there is enough buffer space to read data. */
+	CHECK_BUFFER_SPACE(data, buf, len, NULL);
+
+	/* consume read data. */
+	BUFFER_CONSUME(buf, len);
+	return data;
+}
+
 /*
  * Read integers as binary big-endian values.
  */

@@ -231,3 +231,15 @@ print("read zigzag b128_var64:", buf:read_b128_var64(true))
 print("read zigzag b128_var64:", buf:read_b128_var64(true))
 print("length:", buf:length())
 
+	-- append strings
+print("append data:", buf:append_data("123"))
+print("append data:", buf:append_data(" Hello"))
+print("append data:", buf:append_data(", world"))
+print("append data:", buf:append_data("!"))
+print("data = [\n" .. tohex(buf) .. "]")
+print("read data:", buf:read_data(3))
+print("read data:", buf:read_data(6))
+print("read data:", buf:read_data(7))
+print("read data:", buf:read_data(1))
+print("length:", buf:length())
+

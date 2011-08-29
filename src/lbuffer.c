@@ -141,7 +141,7 @@ uint8_t *l_buffer_sub(LBuffer *buf, size_t off, size_t *plen) {
 }
 
 uint8_t *l_buffer_data(LBuffer *buf) {
-	return buf->data;
+	return buf->data + buf->tail;
 }
 
 size_t l_buffer_size(LBuffer *buf) {
