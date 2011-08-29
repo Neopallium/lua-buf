@@ -13,23 +13,30 @@
 #endif
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/types.h>
 #include <sys/user.h>
-#include <glib.h>
 
 #ifdef NDEBUG
 #define l_assert(expr) do { } while(0)
 #define l_assert2(expr, str) do { } while(0)
 #else
-#define l_assert(expr) g_assert(expr)
-#define l_assert2(expr, str) G_STMT_START { \
-  if L_LIKELY(expr) {                     \
-  } else {                                \
-    g_assertion_message_expr (G_LOG_DOMAIN, __FILE__, __LINE__, G_STRFUNC, str ", " #expr); \
-  }                                       \
-} G_STMT_END
+#define l_assert(expr) do { \
+  if L_LIKELY(expr) { \
+  } else { \
+    fprintf(stderr, #expr); \
+		abort(); \
+  } \
+} while(0)
+#define l_assert2(expr, str) do { \
+  if L_LIKELY(expr) { \
+  } else { \
+    fprintf(stderr, str ", " #expr); \
+		abort(); \
+  } \
+} while(0)
 #endif
 
 #define l_strlen(str) \
@@ -40,8 +47,13 @@
 #define L_FUNC_UNUSED __attribute__((unused))
 
 /* L_LIKELY/L_UNLIKELY */
-#define L_LIKELY(exp) G_LIKELY(exp)
-#define L_UNLIKELY(exp) G_UNLIKELY(exp)
+#if defined(__GNUC__) && (__GNUC__ > 2) && defined(__OPTIMIZE__)
+#define L_LIKELY(exp) (__builtin_expect(((exp) ? 1 : 0), 1))
+#define L_UNLIKELY(exp) (__builtin_expect(((exp) ? 1 : 0), 0))
+#else
+#define L_LIKELY(exp) (exp)
+#define L_UNLIKELY(exp) (exp)
+#endif
 
 /* L_PAGE_SIZE */
 #ifdef PAGE_SIZE

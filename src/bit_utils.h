@@ -7,8 +7,6 @@
 
 #include "lcommon.h"
 
-#define BITS_PER_LONG (8 * GLIB_SIZEOF_LONG)
-
 /**
  * bit utility functions.
  */
@@ -53,7 +51,7 @@ static inline uint32_t l_count_trailing_zeros(uint32_t x) {
 }
 static inline uint32_t l_count_trailing_zerosl(uint64_t x) {
 #if defined(__GNUC__) && (__GNUC__ >= 4) && defined(__OPTIMIZE__)
-	return L_LIKELY(x) ? __builtin_ctzl(x) : L_BITS_PER_LONG;
+	return L_LIKELY(x) ? __builtin_ctzl(x) : 64;
 #else
 	return l_bit_countl(~x & (x - 1));
 #endif
@@ -77,7 +75,7 @@ static inline uint32_t l_count_leading_zeros(uint32_t x) {
 }
 static inline uint32_t l_count_leading_zerosl(uint64_t x) {
 #if defined(__GNUC__) && (__GNUC__ >= 4) && defined(__OPTIMIZE__)
-	return L_LIKELY(x) ? __builtin_clzl(x) : L_BITS_PER_LONG;
+	return L_LIKELY(x) ? __builtin_clzl(x) : 64;
 #else
 	x = x | (x >> 1);
 	x = x | (x >> 2);

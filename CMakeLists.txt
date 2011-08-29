@@ -33,12 +33,6 @@ if(NOT ${LUA51_FOUND})
 endif()
 set(MODULE_LIBS "${MODULE_LIBS};${LUA_LIBRARIES}")
 
-## GLib 2.0
-pkg_search_module(GLIB REQUIRED glib-2.0>=2.14)
-set(MODULE_CFLAGS "${MODULE_CFLAGS} ${GLIB_CFLAGS}")
-set(LIB_CFLAGS "${LIB_CFLAGS} ${GLIB_CFLAGS}")
-set(LIB_LDFLAGS "${LIB_LDFLAGS} ${GLIB_LDFLAGS}")
-
 ## LuaNativeObjects
 include(LuaNativeObjects)
 
@@ -64,13 +58,11 @@ endif()
 
 add_library(lbuffer SHARED ${LBUFFER_SRC})
 target_link_libraries(lbuffer ${LIB_LIBS})
-message(STATUS "lib cflags: ${LIB_CFLAGS}")
 add_target_properties(lbuffer COMPILE_FLAGS "${LIB_CFLAGS}")
 add_target_properties(lbuffer LINK_FLAGS "${LD_FLAGS} ${LIB_LDFLAGS}")
 
 add_library(lua-buf MODULE ${LUA_BUFFER_SRC})
 target_link_libraries(lua-buf lbuffer ${MODULE_LIBS})
-message(STATUS "module cflags: ${MODULE_CFLAGS}")
 add_target_properties(lua-buf COMPILE_FLAGS "${MODULE_CFLAGS}")
 add_target_properties(lua-buf LINK_FLAGS "${LD_FLAGS} ${MODULE_LDFLAGS}")
 set_target_properties(lua-buf PROPERTIES PREFIX "")
