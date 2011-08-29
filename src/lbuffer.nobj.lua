@@ -40,6 +40,8 @@ uint8_t *l_buffer_sub(LBuffer *buf, size_t off, size_t *plen);
 
 const uint8_t *l_buffer_read_data_len(LBuffer *buf, size_t len);
 
+const char *l_buffer_read_string_len(LBuffer *buf, size_t *plen);
+
 ]],
 		ffi_source[[
 local LBuffer_tmp = ffi.new("LBuffer")
@@ -131,8 +133,22 @@ local sub_len_tmp = ffi.new("size_t[1]")
 	${data_len} = ${len};
 ]],
 		ffi_source[[
-	${data} = C.l_buffer_read_data_len(${this}, ${len});
-	${data_len} = ${len};
+	${data} = C.l_buffer_read_data_len(${this}, ${len})
+	${data_len} = ${len}
+]],
+	},
+		ffi_source[[
+local read_string_len_tmp = ffi.new("size_t[1]")
+]],
+	method "read_string" {
+		var_out{ "const char *", "str", has_length = true },
+		c_source[[
+	${str} = l_buffer_read_string_len(${this}, &(${str_len}));
+]],
+		ffi_source[[
+	${str_len} = read_string_len_tmp
+	${str} = C.l_buffer_read_string_len(${this}, ${str_len})
+	${str_len} = ${str_len}[0]
 ]],
 	},
 	method "read_uint8" {
@@ -181,6 +197,9 @@ local sub_len_tmp = ffi.new("size_t[1]")
 	--[[ Append methods. ]]
 	method "append_data" {
 		c_method_call "int" "l_buffer_append_data_len" { "const char *", "data", "size_t", "#data" }
+	},
+	method "append_string" {
+		c_method_call "int" "l_buffer_append_string_len" { "const char *", "str", "size_t", "#str" }
 	},
 	method "append_uint8" {
 		c_method_call "int" "l_buffer_append_uint8_t" { "uint8_t", "num" }

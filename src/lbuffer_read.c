@@ -39,6 +39,25 @@ const uint8_t *l_buffer_read_data_len(LBuffer *buf, size_t len) {
 	return data;
 }
 
+const char *l_buffer_read_string_len(LBuffer *buf, size_t *plen) {
+	char *data, *p;
+	size_t len;
+
+	/* search for null byte. */
+	len = L_BUFFER_LENGTH(buf);
+	data = buf->data + buf->tail;
+	p = memchr(data, 0, len);
+	/* check if null byte was found. */
+	if(p == NULL) return NULL;
+	/* calculate length of string. */
+	len = (p - data);
+	*plen = len;
+
+	/* consume string & null byte. */
+	BUFFER_CONSUME(buf, len + 1);
+	return data;
+}
+
 /*
  * Read integers as binary big-endian values.
  */

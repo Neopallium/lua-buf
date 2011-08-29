@@ -11,6 +11,8 @@
  */
 L_LIB_API int l_buffer_append_data_len(LBuffer *buf, const uint8_t *data, size_t len);
 
+L_LIB_API int l_buffer_append_string_len(LBuffer *buf, const char *str, size_t len);
+
 /**
  * Append integers as binary big-endian values.
  * @public @memberof LBuffer

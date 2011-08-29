@@ -231,7 +231,7 @@ print("read zigzag b128_var64:", buf:read_b128_var64(true))
 print("read zigzag b128_var64:", buf:read_b128_var64(true))
 print("length:", buf:length())
 
-	-- test append strings
+	-- test append data (doesn't append null-byte)
 print("append data:", buf:append_data("123"))
 print("append data:", buf:append_data(" Hello"))
 print("append data:", buf:append_data(", world"))
@@ -241,6 +241,18 @@ print("read data:", buf:read_data(3))
 print("read data:", buf:read_data(6))
 print("read data:", buf:read_data(7))
 print("read data:", buf:read_data(1))
+print("length:", buf:length())
+
+	-- test append null-terminated strings
+print("append string:", buf:append_string("123"))
+print("append string:", buf:append_string(" Hello"))
+print("append string:", buf:append_string(", world"))
+print("append string:", buf:append_string("!"))
+print("data = [\n" .. tohex(buf) .. "]")
+print("read string:", buf:read_string())
+print("read string:", buf:read_string())
+print("read string:", buf:read_string())
+print("read string:", buf:read_string())
 print("length:", buf:length())
 
 -- test growing the buffer.

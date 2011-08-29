@@ -11,6 +11,8 @@
 
 L_LIB_API const uint8_t *l_buffer_read_data_len(LBuffer *buf, size_t len);
 
+L_LIB_API const char *l_buffer_read_string_len(LBuffer *buf, size_t *plen);
+
 /**
  * Read an 8-bit binary big-endian integer.
  *

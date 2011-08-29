@@ -12,11 +12,8 @@
 #undef CHECK_BUFFER_SPACE
 #endif
 #define CHECK_BUFFER_SPACE(data, buf, need, return_val) do { \
-	size_t new_head = (buf)->head + (need); /* cal. free space. */\
-	if L_UNLIKELY(new_head > (buf)->size) { \
-		if L_UNLIKELY(!l_buffer_resize_internal((buf), new_head)) return (return_val); \
-	} \
-	(data) = (buf)->data + (buf)->head; \
+	(data) = l_buffer_get_head((buf), (need)); \
+	if L_UNLIKELY((data) == NULL) return (return_val); \
 } while(0)
 
 /*
@@ -32,6 +29,11 @@ int l_buffer_append_data_len(LBuffer *buf, const uint8_t *src, size_t len) {
 	memcpy(data, src, len);
 	buf->head += len;
 	return len;
+}
+
+int l_buffer_append_string_len(LBuffer *buf, const char *str, size_t len) {
+	/* append null-terminated string. */
+	return l_buffer_append_data_len(buf, str, len+1);
 }
 
 /*
