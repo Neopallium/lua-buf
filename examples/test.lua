@@ -231,7 +231,7 @@ print("read zigzag b128_var64:", buf:read_b128_var64(true))
 print("read zigzag b128_var64:", buf:read_b128_var64(true))
 print("length:", buf:length())
 
-	-- append strings
+	-- test append strings
 print("append data:", buf:append_data("123"))
 print("append data:", buf:append_data(" Hello"))
 print("append data:", buf:append_data(", world"))
@@ -241,5 +241,16 @@ print("read data:", buf:read_data(3))
 print("read data:", buf:read_data(6))
 print("read data:", buf:read_data(7))
 print("read data:", buf:read_data(1))
+print("length:", buf:length())
+
+-- test growing the buffer.
+local size = buf:size()
+local target_size = size * 5
+
+repeat
+	buf:append_data("xXxXxXxXxXxXxX")
+	size = buf:size()
+until size >= target_size
+print("size:", buf:size())
 print("length:", buf:length())
 

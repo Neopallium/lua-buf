@@ -45,6 +45,7 @@ static bool l_buffer_resize_internal(LBuffer *buf, size_t size) {
 	if(data == NULL && size > 0) {
 		return false;
 	}
+	buf->data = data;
 
 	if(buf->head > size) {
 		/* buffer is shrinking. */
