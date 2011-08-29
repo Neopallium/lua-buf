@@ -943,6 +943,8 @@ static const char buf_ffi_lua_code[] = "local error = error\n"
 "\n"
 "const uint8_t *l_buffer_read_data_len(LBuffer *buf, size_t len);\n"
 "\n"
+"const char *l_buffer_read_string_len(LBuffer *buf, size_t *plen);\n"
+"\n"
 "\n"
 "void l_buffer_free(LBuffer * this);\n"
 "\n"
@@ -991,6 +993,8 @@ static const char buf_ffi_lua_code[] = "local error = error\n"
 "int l_buffer_read_b128_var64(LBuffer * this, int64_t *num, bool zigzag);\n"
 "\n"
 "int l_buffer_append_data_len(LBuffer * this, const char * data, size_t data_len);\n"
+"\n"
+"int l_buffer_append_string_len(LBuffer * this, const char * str, size_t str_len);\n"
 "\n"
 "int l_buffer_append_uint8_t(LBuffer * this, uint8_t num);\n"
 "\n"
@@ -1193,11 +1197,26 @@ static const char buf_ffi_lua_code[] = "local error = error\n"
 "  \n"
 "  local data_len = 0\n"
 "  local data\n"
-"	data = C.l_buffer_read_data_len(this, len);\n"
-"	data_len = len;\n"
+"	data = C.l_buffer_read_data_len(this, len)\n"
+"	data_len = len\n"
 "\n"
 "  data = ((nil ~= data) and ffi.string(data,data_len))\n"
 "  return data\n"
+"end\n"
+"\n"
+"local read_string_len_tmp = ffi.new(\"size_t[1]\")\n"
+"\n"
+"-- method: read_string\n"
+"function _meth.LBuffer.read_string(self)\n"
+"  local this = obj_type_LBuffer_check(self)\n"
+"  local str_len = 0\n"
+"  local str\n"
+"	str_len = read_string_len_tmp\n"
+"	str = C.l_buffer_read_string_len(this, str_len)\n"
+"	str_len = str_len[0]\n"
+"\n"
+"  str = ((nil ~= str) and ffi.string(str,str_len))\n"
+"  return str\n"
 "end\n"
 "\n"
 "  local read_uint8_num_tmp = ffi.new(\"uint8_t[1]\")\n"
@@ -1378,6 +1397,16 @@ static const char buf_ffi_lua_code[] = "local error = error\n"
 "  rc_l_buffer_append_data_len = C.l_buffer_append_data_len(this, data, data_len)\n"
 "  rc_l_buffer_append_data_len = rc_l_buffer_append_data_len\n"
 "  return rc_l_buffer_append_data_len\n"
+"end\n"
+"\n"
+"-- method: append_string\n"
+"function _meth.LBuffer.append_string(self, str)\n"
+"  local this = obj_type_LBuffer_check(self)\n"
+"  local str_len = #str\n"
+"  local rc_l_buffer_append_string_len\n"
+"  rc_l_buffer_append_string_len = C.l_buffer_append_string_len(this, str, str_len)\n"
+"  rc_l_buffer_append_string_len = rc_l_buffer_append_string_len\n"
+"  return rc_l_buffer_append_string_len\n"
 "end\n"
 "\n"
 "-- method: append_uint8\n"
@@ -1651,6 +1680,17 @@ static int LBuffer__read_data__meth(lua_State *L) {
   return 1;
 }
 
+/* method: read_string */
+static int LBuffer__read_string__meth(lua_State *L) {
+  LBuffer * this = obj_type_LBuffer_check(L,1);
+  size_t str_len = 0;
+  const char * str = NULL;
+	str = l_buffer_read_string_len(this, &(str_len));
+
+  if(str == NULL) lua_pushnil(L);  else lua_pushlstring(L, str,str_len);
+  return 1;
+}
+
 /* method: read_uint8 */
 static int LBuffer__read_uint8__meth(lua_State *L) {
   LBuffer * this = obj_type_LBuffer_check(L,1);
@@ -1815,6 +1855,17 @@ static int LBuffer__append_data__meth(lua_State *L) {
   int rc_l_buffer_append_data_len = 0;
   rc_l_buffer_append_data_len = l_buffer_append_data_len(this, data, data_len);
   lua_pushinteger(L, rc_l_buffer_append_data_len);
+  return 1;
+}
+
+/* method: append_string */
+static int LBuffer__append_string__meth(lua_State *L) {
+  LBuffer * this = obj_type_LBuffer_check(L,1);
+  size_t str_len;
+  const char * str = luaL_checklstring(L,2,&(str_len));
+  int rc_l_buffer_append_string_len = 0;
+  rc_l_buffer_append_string_len = l_buffer_append_string_len(this, str, str_len);
+  lua_pushinteger(L, rc_l_buffer_append_string_len);
   return 1;
 }
 
@@ -1999,6 +2050,7 @@ static const luaL_reg obj_LBuffer_methods[] = {
   {"size", LBuffer__size__meth},
   {"resize", LBuffer__resize__meth},
   {"read_data", LBuffer__read_data__meth},
+  {"read_string", LBuffer__read_string__meth},
   {"read_uint8", LBuffer__read_uint8__meth},
   {"read_int8", LBuffer__read_int8__meth},
   {"read_uint16", LBuffer__read_uint16__meth},
@@ -2014,6 +2066,7 @@ static const luaL_reg obj_LBuffer_methods[] = {
   {"read_b128_uvar64", LBuffer__read_b128_uvar64__meth},
   {"read_b128_var64", LBuffer__read_b128_var64__meth},
   {"append_data", LBuffer__append_data__meth},
+  {"append_string", LBuffer__append_string__meth},
   {"append_uint8", LBuffer__append_uint8__meth},
   {"append_int8", LBuffer__append_int8__meth},
   {"append_uint16", LBuffer__append_uint16__meth},
