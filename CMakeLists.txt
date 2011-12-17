@@ -16,13 +16,9 @@ set(LUA_NATIVE_OBJECTS_PATH ../LuaNativeObjects CACHE PATH
 set(USE_PRE_GENERATED_BINDINGS TRUE CACHE BOOL
 				"Set this to FALSE to re-generate bindings using LuaNativeObjects")
 
-set(MODULE_CFLAGS "${CFLAGS}")
-set(MODULE_LDFLAGS)
-set(MODULE_LIBS)
-
-set(LIB_CFLAGS "${CFLAGS}")
-set(LIB_LDFLAGS)
-set(LIB_LIBS)
+set(COMMON_CFLAGS "${CFLAGS}")
+set(COMMON_LDFLAGS)
+set(COMMON_LIBS)
 
 include(FindPkgConfig)
 include(CustomMacros)
@@ -32,7 +28,7 @@ include(FindLua51)
 if(NOT ${LUA51_FOUND})
 	message(FATAL_ERROR "The FindLua51 module could not find lua :-(")
 endif()
-set(MODULE_LIBS "${MODULE_LIBS};${LUA_LIBRARIES}")
+set(COMMON_LIBS "${COMMON_LIBS};${LUA_LIBRARIES}")
 
 ## LuaNativeObjects
 include(LuaNativeObjects)
@@ -42,35 +38,28 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src
                     ${LUA_INCLUDE_DIR})
 
 ## LuaBuffer
-set(LBUFFER_SRC
+set(LUA_BUFFER_NOBJ_SRC
+	buf.nobj.lua
+)
+set(LUA_BUFFER_SRC
 	src/lbuffer.c
 	src/lbuffer.h
 )
-set(LUA_BUFFER_SRC
-	buf.nobj.lua
-)
 
 if(${USE_PRE_GENERATED_BINDINGS})
-	set(LUA_BUFFER_SRC src/pre_generated-buf.nobj.c)
+	set(LUA_BUFFER_NOBJ_SRC src/pre_generated-buf.nobj.c)
 else()
 	# Generate Lua bindings.
-	GenLuaNativeObjects(LUA_BUFFER_SRC)
+	GenLuaNativeObjects(LUA_BUFFER_NOBJ_SRC)
 endif()
-
-add_library(lbuffer SHARED ${LBUFFER_SRC})
-target_link_libraries(lbuffer ${LIB_LIBS})
-add_target_properties(lbuffer COMPILE_FLAGS "${LIB_CFLAGS}")
-add_target_properties(lbuffer LINK_FLAGS "${LD_FLAGS} ${LIB_LDFLAGS}")
+set(LUA_BUFFER_SRC ${LUA_BUFFER_SRC} ${LUA_BUFFER_NOBJ_SRC})
 
 add_library(lua-buf MODULE ${LUA_BUFFER_SRC})
-target_link_libraries(lua-buf lbuffer ${MODULE_LIBS})
-add_target_properties(lua-buf COMPILE_FLAGS "${MODULE_CFLAGS}")
-add_target_properties(lua-buf LINK_FLAGS "${LD_FLAGS} ${MODULE_LDFLAGS}")
+target_link_libraries(lua-buf ${COMMON_LIBS})
+add_target_properties(lua-buf COMPILE_FLAGS "${COMMON_CFLAGS}")
+add_target_properties(lua-buf LINK_FLAGS "${LD_FLAGS} ${COMMON_LDFLAGS}")
 set_target_properties(lua-buf PROPERTIES PREFIX "")
 set_target_properties(lua-buf PROPERTIES OUTPUT_NAME buf)
-
-install(TARGETS lbuffer
-				DESTINATION lib)
 
 install(TARGETS lua-buf
         DESTINATION "${INSTALL_CMOD}")
