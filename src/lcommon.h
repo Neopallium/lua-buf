@@ -11,8 +11,6 @@
 
 #include <assert.h>
 #include <stdio.h>
-#include <sys/types.h>
-#include <sys/user.h>
 
 #ifdef __WINDOWS__
 
