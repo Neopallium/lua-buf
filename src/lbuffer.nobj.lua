@@ -29,11 +29,11 @@ typedef struct LBuffer LBuffer;
 typedef uint32_t buflen_t;
 
 struct LBuffer {
-	uint8_t   *data;           /**< Buffer data. */
-	buflen_t  tail;            /**< start offset, tail must always be lower then head. */
-	buflen_t  head;            /**< end offset, head must always be lower then size. */
-	buflen_t  size;            /**< total memory size of data. */
-	uint32_t  free_struct: 1;  /**< Should the LBuffer struct be freed. */
+	uint8_t   *_data;           /**< Buffer data. */
+	buflen_t  _tail;            /**< start offset, tail must always be lower then head. */
+	buflen_t  _head;            /**< end offset, head must always be lower then size. */
+	buflen_t  _size;            /**< total memory size of data. */
+	uint32_t  _free_struct: 1;  /**< Should the LBuffer struct be freed. */
 };
 
 uint8_t *l_buffer_sub(LBuffer *buf, size_t off, size_t *plen);

@@ -6,11 +6,7 @@ c_module "buf" {
 
 -- enable FFI bindings support.
 luajit_ffi = true,
-
-ffi_load {
-"lbuffer", -- default lib name.
-Windows = "liblbuffer",
-},
+luajit_ffi_load_cmodule = true,
 
 subfiles {
 "src/lbuffer.nobj.lua",
