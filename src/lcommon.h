@@ -12,6 +12,14 @@
 #include <assert.h>
 #include <stdio.h>
 
+#ifdef _MSC_VER
+#define __WINDOWS__
+#else
+#if defined(_WIN32)
+#define __WINDOWS__
+#endif
+#endif
+
 #ifdef __WINDOWS__
 
 /* for MinGW32 compiler need to include <stdint.h> */
