@@ -29,6 +29,14 @@
 #else
 
 /* define some standard types missing on Windows. */
+#ifndef __INT8_MAX__
+typedef __int8 int8_t;
+typedef unsigned __int8 uint8_t;
+#endif
+#ifndef __INT16_MAX__
+typedef __int16 int16_t;
+typedef unsigned __int16 uint16_t;
+#endif
 #ifndef __INT32_MAX__
 typedef __int32 int32_t;
 typedef unsigned __int32 uint32_t;
@@ -48,7 +56,7 @@ typedef int bool;
 #endif
 
 #define L_LIB_API __declspec(dllexport)
-#define L_INLINE static inline
+#define L_INLINE static
 
 #else
 

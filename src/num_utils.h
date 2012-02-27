@@ -10,8 +10,19 @@
 /*
  * endianness convertion.
  */
+#ifdef __WINDOWS__
+
+#include <stdlib.h>
+#define bswap_16(x) _byteswap_ushort(x)
+#define bswap_32(x) _byteswap_ulong(x)
+#define bswap_64(x) _byteswap_uint64(x)
+
+#else
+
 #include <endian.h>
 #include <byteswap.h>
+
+#endif
 
 #ifndef BYTE_ORDER
 #define BYTE_ORDER __BYTE_ORDER

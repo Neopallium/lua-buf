@@ -108,12 +108,12 @@ int l_buffer_append_uint64_t(LBuffer *buf, uint64_t num) {
  * Append floats/doubles as binary values.
  */
 int l_buffer_append_float(LBuffer *buf, float num) {
-	union { float fnum; uint32_t inum; } data = { .fnum = num };
+	union { float fnum; uint32_t inum; } data = { num };
 	return l_buffer_append_uint32_t(buf, data.inum);
 }
 
 int l_buffer_append_double(LBuffer *buf, double num) {
-	union { double fnum; uint64_t inum; } data = { .fnum = num };
+	union { double fnum; uint64_t inum; } data = { num };
 	return l_buffer_append_uint64_t(buf, data.inum);
 }
 

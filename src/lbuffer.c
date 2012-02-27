@@ -110,7 +110,7 @@ L_INLINE bool l_buffer_grow_space(LBuffer *buf, size_t new_size) {
 bool l_buffer_set_length(LBuffer *buf, size_t len) {
 	size_t head = (buf)->tail + len;
 	if L_UNLIKELY(head > buf->size) {
-		if L_UNLIKELY(!l_buffer_grow_space(buf, head)) { return NULL; }
+		if L_UNLIKELY(!l_buffer_grow_space(buf, head)) { return false; }
 	}
 	buf->head = head;
 	return true;
@@ -132,7 +132,6 @@ L_INLINE uint8_t *l_buffer_get_head(LBuffer *buf, size_t need) {
 }
 
 uint8_t *l_buffer_sub(LBuffer *buf, size_t off, size_t *plen) {
-	size_t end;
 	size_t len;
 
 	if(plen) {
