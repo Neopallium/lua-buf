@@ -10,14 +10,15 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#include "lbuffer.h"
-
-
 #define REG_PACKAGE_IS_CONSTRUCTOR 0
+#define REG_MODULES_AS_GLOBALS 0
 #define REG_OBJECTS_AS_GLOBALS 0
 #define OBJ_DATA_HIDDEN_METATABLE 1
-#define LUAJIT_FFI 1
 #define USE_FIELD_GET_SET_METHODS 0
+#define LUAJIT_FFI 1
+
+
+#include "lbuffer.h"
 
 
 
@@ -39,6 +40,7 @@
 /* for MinGW32 compiler need to include <stdint.h> */
 #ifdef __GNUC__
 #include <stdint.h>
+#include <stdbool.h>
 #else
 
 /* define some standard types missing on Windows. */
@@ -96,19 +98,26 @@ typedef int bool;
 #define assert_obj_type(type, obj)
 #endif
 
-#ifndef obj_type_free
+void *nobj_realloc(void *ptr, size_t osize, size_t nsize);
+
+void *nobj_realloc(void *ptr, size_t osize, size_t nsize) {
+	(void)osize;
+	if(0 == nsize) {
+		free(ptr);
+		return NULL;
+	}
+	return realloc(ptr, nsize);
+}
+
 #define obj_type_free(type, obj) do { \
 	assert_obj_type(type, obj); \
-	free((obj)); \
+	nobj_realloc((obj), sizeof(type), 0); \
 } while(0)
-#endif
 
-#ifndef obj_type_new
 #define obj_type_new(type, obj) do { \
 	assert_obj_type(type, obj); \
-	(obj) = malloc(sizeof(type)); \
+	(obj) = nobj_realloc(NULL, 0, sizeof(type)); \
 } while(0)
-#endif
 
 typedef struct obj_type obj_type;
 
@@ -166,15 +175,22 @@ typedef struct obj_field {
 	uint32_t        flags;  /**< is_writable:1bit */
 } obj_field;
 
+typedef enum {
+	REG_OBJECT,
+	REG_PACKAGE,
+	REG_META,
+} module_reg_type;
+
 typedef struct reg_sub_module {
 	obj_type        *type;
-	int             is_package;
+	module_reg_type req_type;
 	const luaL_reg  *pub_funcs;
 	const luaL_reg  *methods;
 	const luaL_reg  *metas;
 	const obj_base  *bases;
 	const obj_field *fields;
 	const obj_const *constants;
+	int             bidirectional_consts;
 } reg_sub_module;
 
 #define OBJ_UDATA_FLAG_OWN (1<<0)
@@ -186,14 +202,22 @@ typedef struct obj_udata {
 } obj_udata;
 
 /* use static pointer as key to weak userdata table. */
-static char *obj_udata_weak_ref_key = "obj_udata_weak_ref_key";
+static char obj_udata_weak_ref_key[] = "obj_udata_weak_ref_key";
+
+/* use static pointer as key to module's private table. */
+static char obj_udata_private_key[] = "obj_udata_private_key";
 
 #if LUAJIT_FFI
+typedef int (*ffi_export_func_t)(void);
 typedef struct ffi_export_symbol {
 	const char *name;
-	void       *sym;
+	union {
+	void               *data;
+	ffi_export_func_t  func;
+	} sym;
 } ffi_export_symbol;
 #endif
+
 
 
 
@@ -206,8 +230,99 @@ static obj_type obj_types[] = {
 };
 
 
+#if LUAJIT_FFI
+
+/* nobj_ffi_support_enabled_hint should be set to 1 when FFI support is enabled in at-least one
+ * instance of a LuaJIT state.  It should never be set back to 0. */
+static int nobj_ffi_support_enabled_hint = 0;
+static const char nobj_ffi_support_key[] = "LuaNativeObject_FFI_SUPPORT";
+static const char nobj_check_ffi_support_code[] =
+"local stat, ffi=pcall(require,\"ffi\")\n" /* try loading LuaJIT`s FFI module. */
+"if not stat then return false end\n"
+"return true\n";
+
+static int nobj_check_ffi_support(lua_State *L) {
+	int rc;
+	int err;
+
+	/* check if ffi test has already been done. */
+	lua_pushstring(L, nobj_ffi_support_key);
+	lua_rawget(L, LUA_REGISTRYINDEX);
+	if(!lua_isnil(L, -1)) {
+		rc = lua_toboolean(L, -1);
+		lua_pop(L, 1);
+		return rc; /* return results of previous check. */
+	}
+	lua_pop(L, 1); /* pop nil. */
+
+	err = luaL_loadbuffer(L, nobj_check_ffi_support_code,
+		sizeof(nobj_check_ffi_support_code) - 1, nobj_ffi_support_key);
+	if(0 == err) {
+		err = lua_pcall(L, 0, 1, 0);
+	}
+	if(err) {
+		const char *msg = "<err not a string>";
+		if(lua_isstring(L, -1)) {
+			msg = lua_tostring(L, -1);
+		}
+		printf("Error when checking for FFI-support: %s\n", msg);
+		lua_pop(L, 1); /* pop error message. */
+		return 0;
+	}
+	/* check results of test. */
+	rc = lua_toboolean(L, -1);
+	lua_pop(L, 1); /* pop results. */
+		/* cache results. */
+	lua_pushstring(L, nobj_ffi_support_key);
+	lua_pushboolean(L, rc);
+	lua_rawset(L, LUA_REGISTRYINDEX);
+
+	/* turn-on hint that there is FFI code enabled. */
+	if(rc) {
+		nobj_ffi_support_enabled_hint = 1;
+	}
+
+	return rc;
+}
+
+static int nobj_try_loading_ffi(lua_State *L, const char *ffi_mod_name,
+		const char *ffi_init_code, const ffi_export_symbol *ffi_exports, int priv_table)
+{
+	int err;
+
+	/* export symbols to priv_table. */
+	while(ffi_exports->name != NULL) {
+		lua_pushstring(L, ffi_exports->name);
+		lua_pushlightuserdata(L, ffi_exports->sym.data);
+		lua_settable(L, priv_table);
+		ffi_exports++;
+	}
+	err = luaL_loadbuffer(L, ffi_init_code, strlen(ffi_init_code), ffi_mod_name);
+	if(0 == err) {
+		lua_pushvalue(L, -2); /* dup C module's table. */
+		lua_pushvalue(L, priv_table); /* move priv_table to top of stack. */
+		lua_remove(L, priv_table);
+		lua_pushvalue(L, LUA_REGISTRYINDEX);
+		err = lua_pcall(L, 3, 0, 0);
+	}
+	if(err) {
+		const char *msg = "<err not a string>";
+		if(lua_isstring(L, -1)) {
+			msg = lua_tostring(L, -1);
+		}
+		printf("Failed to install FFI-based bindings: %s\n", msg);
+		lua_pop(L, 1); /* pop error message. */
+	}
+	return err;
+}
+#endif
+
 #ifndef REG_PACKAGE_IS_CONSTRUCTOR
 #define REG_PACKAGE_IS_CONSTRUCTOR 1
+#endif
+
+#ifndef REG_MODULES_AS_GLOBALS
+#define REG_MODULES_AS_GLOBALS 0
 #endif
 
 #ifndef REG_OBJECTS_AS_GLOBALS
@@ -297,6 +412,25 @@ static FUNC_UNUSED obj_udata *obj_udata_luacheck_internal(lua_State *L, int _ind
 				return ud;
 			}
 		}
+	} else {
+		/* handle cdata. */
+		/* get private table. */
+		lua_pushlightuserdata(L, obj_udata_private_key);
+		lua_rawget(L, LUA_REGISTRYINDEX); /* private table. */
+		/* get cdata type check function from private table. */
+		lua_pushlightuserdata(L, type);
+		lua_rawget(L, -2);
+
+		/* pass cdata value to type checking function. */
+		lua_pushvalue(L, _index);
+		lua_call(L, 1, 1);
+		if(!lua_isnil(L, -1)) {
+			/* valid type get pointer from cdata. */
+			lua_pop(L, 2);
+			*obj = *(void **)lua_topointer(L, _index);
+			return ud;
+		}
+		lua_pop(L, 2);
 	}
 	if(not_delete) {
 		luaL_typerror(L, _index, type->name); /* is not a userdata value. */
@@ -306,6 +440,15 @@ static FUNC_UNUSED obj_udata *obj_udata_luacheck_internal(lua_State *L, int _ind
 
 static FUNC_UNUSED void *obj_udata_luacheck(lua_State *L, int _index, obj_type *type) {
 	void *obj = NULL;
+	obj_udata_luacheck_internal(L, _index, &(obj), type, 1);
+	return obj;
+}
+
+static FUNC_UNUSED void *obj_udata_luaoptional(lua_State *L, int _index, obj_type *type) {
+	void *obj = NULL;
+	if(lua_isnil(L, _index)) {
+		return obj;
+	}
 	obj_udata_luacheck_internal(L, _index, &(obj), type, 1);
 	return obj;
 }
@@ -328,6 +471,17 @@ static FUNC_UNUSED void obj_udata_luapush(lua_State *L, void *obj, obj_type *typ
 		lua_pushnil(L);
 		return;
 	}
+#if LUAJIT_FFI
+	lua_pushlightuserdata(L, type);
+	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+	if(nobj_ffi_support_enabled_hint && lua_isfunction(L, -1)) {
+		/* call special FFI "void *" to FFI object convertion function. */
+		lua_pushlightuserdata(L, obj);
+		lua_pushinteger(L, flags);
+		lua_call(L, 2, 1);
+		return;
+	}
+#endif
 	/* check for type caster. */
 	if(type->dcaster) {
 		(type->dcaster)(&obj, &type);
@@ -337,8 +491,12 @@ static FUNC_UNUSED void obj_udata_luapush(lua_State *L, void *obj, obj_type *typ
 	ud->obj = obj;
 	ud->flags = flags;
 	/* get obj_type metatable. */
+#if LUAJIT_FFI
+	lua_insert(L, -2); /* move userdata below metatable. */
+#else
 	lua_pushlightuserdata(L, type);
 	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+#endif
 	lua_setmetatable(L, -2);
 }
 
@@ -384,6 +542,18 @@ static FUNC_UNUSED void obj_udata_luapush_weak(lua_State *L, void *obj, obj_type
 	}
 	lua_pop(L, 1);  /* pop nil. */
 
+#if LUAJIT_FFI
+	lua_pushlightuserdata(L, type);
+	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+	if(nobj_ffi_support_enabled_hint && lua_isfunction(L, -1)) {
+		lua_remove(L, -2);
+		/* call special FFI "void *" to FFI object convertion function. */
+		lua_pushlightuserdata(L, obj);
+		lua_pushinteger(L, flags);
+		lua_call(L, 2, 1);
+		return;
+	}
+#endif
 	/* create new userdata. */
 	ud = (obj_udata *)lua_newuserdata(L, sizeof(obj_udata));
 
@@ -391,8 +561,12 @@ static FUNC_UNUSED void obj_udata_luapush_weak(lua_State *L, void *obj, obj_type
 	ud->obj = obj;
 	ud->flags = flags;
 	/* get obj_type metatable. */
+#if LUAJIT_FFI
+	lua_insert(L, -2); /* move userdata below metatable. */
+#else
 	lua_pushlightuserdata(L, type);
 	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+#endif
 	lua_setmetatable(L, -2);
 
 	/* add weak reference to object. */
@@ -456,15 +630,39 @@ static FUNC_UNUSED void * obj_simple_udata_luacheck(lua_State *L, int _index, ob
 				return ud;
 			}
 		}
+	} else {
+		/* handle cdata. */
+		/* get private table. */
+		lua_pushlightuserdata(L, obj_udata_private_key);
+		lua_rawget(L, LUA_REGISTRYINDEX); /* private table. */
+		/* get cdata type check function from private table. */
+		lua_pushlightuserdata(L, type);
+		lua_rawget(L, -2);
+
+		/* pass cdata value to type checking function. */
+		lua_pushvalue(L, _index);
+		lua_call(L, 1, 1);
+		if(!lua_isnil(L, -1)) {
+			/* valid type get pointer from cdata. */
+			lua_pop(L, 2);
+			return (void *)lua_topointer(L, _index);
+		}
+		lua_pop(L, 2);
 	}
 	luaL_typerror(L, _index, type->name); /* is not a userdata value. */
 	return NULL;
 }
 
-static FUNC_UNUSED void * obj_simple_udata_luadelete(lua_State *L, int _index, obj_type *type, int *flags) {
+static FUNC_UNUSED void * obj_simple_udata_luaoptional(lua_State *L, int _index, obj_type *type) {
+	if(lua_isnil(L, _index)) {
+		return NULL;
+	}
+	return obj_simple_udata_luacheck(L, _index, type);
+}
+
+static FUNC_UNUSED void * obj_simple_udata_luadelete(lua_State *L, int _index, obj_type *type) {
 	void *obj;
 	obj = obj_simple_udata_luacheck(L, _index, type);
-	*flags = OBJ_UDATA_FLAG_OWN;
 	/* clear the metatable to invalidate userdata. */
 	lua_pushnil(L);
 	lua_setmetatable(L, _index);
@@ -473,12 +671,27 @@ static FUNC_UNUSED void * obj_simple_udata_luadelete(lua_State *L, int _index, o
 
 static FUNC_UNUSED void *obj_simple_udata_luapush(lua_State *L, void *obj, int size, obj_type *type)
 {
-	/* create new userdata. */
-	void *ud = lua_newuserdata(L, size);
-	memcpy(ud, obj, size);
-	/* get obj_type metatable. */
+	void *ud;
+#if LUAJIT_FFI
 	lua_pushlightuserdata(L, type);
 	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+	if(nobj_ffi_support_enabled_hint && lua_isfunction(L, -1)) {
+		/* call special FFI "void *" to FFI object convertion function. */
+		lua_pushlightuserdata(L, obj);
+		lua_call(L, 1, 1);
+		return obj;
+	}
+#endif
+	/* create new userdata. */
+	ud = lua_newuserdata(L, size);
+	memcpy(ud, obj, size);
+	/* get obj_type metatable. */
+#if LUAJIT_FFI
+	lua_insert(L, -2); /* move userdata below metatable. */
+#else
+	lua_pushlightuserdata(L, type);
+	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+#endif
 	lua_setmetatable(L, -2);
 
 	return ud;
@@ -527,7 +740,8 @@ static int obj_constructor_call_wrapper(lua_State *L) {
 	return lua_gettop(L);
 }
 
-static void obj_type_register_constants(lua_State *L, const obj_const *constants, int tab_idx) {
+static void obj_type_register_constants(lua_State *L, const obj_const *constants, int tab_idx,
+		int bidirectional) {
 	/* register constants. */
 	while(constants->name != NULL) {
 		lua_pushstring(L, constants->name);
@@ -545,6 +759,22 @@ static void obj_type_register_constants(lua_State *L, const obj_const *constants
 			lua_pushnil(L);
 			break;
 		}
+		/* map values back to keys. */
+		if(bidirectional) {
+			/* check if value already exists. */
+			lua_pushvalue(L, -1);
+			lua_rawget(L, tab_idx - 3);
+			if(lua_isnil(L, -1)) {
+				lua_pop(L, 1);
+				/* add value->key mapping. */
+				lua_pushvalue(L, -1);
+				lua_pushvalue(L, -3);
+				lua_rawset(L, tab_idx - 4);
+			} else {
+				/* value already exists. */
+				lua_pop(L, 1);
+			}
+		}
 		lua_rawset(L, tab_idx - 2);
 		constants++;
 	}
@@ -559,9 +789,33 @@ static void obj_type_register_package(lua_State *L, const reg_sub_module *type_r
 		luaL_register(L, NULL, reg_list);
 	}
 
-	obj_type_register_constants(L, type_reg->constants, -1);
+	obj_type_register_constants(L, type_reg->constants, -1, type_reg->bidirectional_consts);
 
 	lua_pop(L, 1);  /* drop package table */
+}
+
+static void obj_type_register_meta(lua_State *L, const reg_sub_module *type_reg) {
+	const luaL_reg *reg_list;
+
+	/* create public functions table. */
+	reg_list = type_reg->pub_funcs;
+	if(reg_list != NULL && reg_list[0].name != NULL) {
+		/* register functions */
+		luaL_register(L, NULL, reg_list);
+	}
+
+	obj_type_register_constants(L, type_reg->constants, -1, type_reg->bidirectional_consts);
+
+	/* register methods. */
+	luaL_register(L, NULL, type_reg->methods);
+
+	/* create metatable table. */
+	lua_newtable(L);
+	luaL_register(L, NULL, type_reg->metas); /* fill metatable */
+	/* setmetatable on meta-object. */
+	lua_setmetatable(L, -2);
+
+	lua_pop(L, 1);  /* drop meta-object */
 }
 
 static void obj_type_register(lua_State *L, const reg_sub_module *type_reg, int priv_table) {
@@ -569,8 +823,12 @@ static void obj_type_register(lua_State *L, const reg_sub_module *type_reg, int 
 	obj_type *type = type_reg->type;
 	const obj_base *base = type_reg->bases;
 
-	if(type_reg->is_package == 1) {
+	if(type_reg->req_type == REG_PACKAGE) {
 		obj_type_register_package(L, type_reg);
+		return;
+	}
+	if(type_reg->req_type == REG_META) {
+		obj_type_register_meta(L, type_reg);
 		return;
 	}
 
@@ -621,14 +879,10 @@ static void obj_type_register(lua_State *L, const reg_sub_module *type_reg, int 
 	lua_pushvalue(L, -2); /* dup metatable. */
 	lua_rawset(L, LUA_REGISTRYINDEX);    /* REGISTRY[type] = metatable */
 
-#if LUAJIT_FFI
 	/* add metatable to 'priv_table' */
 	lua_pushstring(L, type->name);
 	lua_pushvalue(L, -2); /* dup metatable. */
 	lua_rawset(L, priv_table);    /* priv_table["<object_name>"] = metatable */
-#else
-	(void)priv_table;
-#endif
 
 	luaL_register(L, NULL, type_reg->metas); /* fill metatable */
 
@@ -639,7 +893,7 @@ static void obj_type_register(lua_State *L, const reg_sub_module *type_reg, int 
 		base++;
 	}
 
-	obj_type_register_constants(L, type_reg->constants, -2);
+	obj_type_register_constants(L, type_reg->constants, -2, type_reg->bidirectional_consts);
 
 	lua_pushliteral(L, "__index");
 	lua_pushvalue(L, -3);               /* dup methods table */
@@ -659,87 +913,96 @@ static FUNC_UNUSED int lua_checktype_ref(lua_State *L, int _index, int _type) {
 	return luaL_ref(L, LUA_REGISTRYINDEX);
 }
 
-#if LUAJIT_FFI
-static int nobj_udata_new_ffi(lua_State *L) {
-	size_t size = luaL_checkinteger(L, 1);
-	void *ud;
-	luaL_checktype(L, 2, LUA_TTABLE);
-	lua_settop(L, 2);
-	/* create userdata. */
-	ud = lua_newuserdata(L, size);
-	lua_replace(L, 1);
-	/* set userdata's metatable. */
-	lua_setmetatable(L, 1);
-	return 1;
-}
-
-static int nobj_try_loading_ffi(lua_State *L, const char *ffi_mod_name,
-		const char *ffi_init_code, const ffi_export_symbol *ffi_exports, int priv_table)
-{
-	int err;
-
-	/* export symbols to priv_table. */
-	while(ffi_exports->name != NULL) {
-		lua_pushstring(L, ffi_exports->name);
-		lua_pushlightuserdata(L, ffi_exports->sym);
-		lua_settable(L, priv_table);
-		ffi_exports++;
-	}
-	err = luaL_loadbuffer(L, ffi_init_code, strlen(ffi_init_code), ffi_mod_name);
-	if(0 == err) {
-		lua_pushvalue(L, -2); /* dup C module's table. */
-		lua_pushvalue(L, priv_table); /* move priv_table to top of stack. */
-		lua_remove(L, priv_table);
-		lua_pushcfunction(L, nobj_udata_new_ffi);
-		err = lua_pcall(L, 3, 0, 0);
-	}
-	if(err) {
-		const char *msg = "<err not a string>";
-		if(lua_isstring(L, -1)) {
-			msg = lua_tostring(L, -1);
-		}
-		printf("Failed to install FFI-based bindings: %s\n", msg);
-		lua_pop(L, 1); /* pop error message. */
-	}
-	return err;
-}
-#endif
 
 
 #define obj_type_LBuffer_check(L, _index) \
 	(LBuffer *)obj_simple_udata_luacheck(L, _index, &(obj_type_LBuffer))
-#define obj_type_LBuffer_delete(L, _index, flags) \
-	(LBuffer *)obj_simple_udata_luadelete(L, _index, &(obj_type_LBuffer), flags)
-#define obj_type_LBuffer_push(L, obj, flags) \
+#define obj_type_LBuffer_optional(L, _index) \
+	(LBuffer *)obj_simple_udata_luaoptional(L, _index, &(obj_type_LBuffer))
+#define obj_type_LBuffer_delete(L, _index) \
+	(LBuffer *)obj_simple_udata_luadelete(L, _index, &(obj_type_LBuffer))
+#define obj_type_LBuffer_push(L, obj) \
 	obj_simple_udata_luapush(L, obj, sizeof(LBuffer), &(obj_type_LBuffer))
 
 
 
 
-static const char buf_ffi_lua_code[] = "local error = error\n"
+static const char buf_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
+"local function ffi_safe_load(name, global)\n"
+"	local stat, C = pcall(ffi.load, name, global)\n"
+"	if not stat then return nil, C end\n"
+"	if global then return ffi.C end\n"
+"	return C\n"
+"end\n"
+"local function ffi_load(name, global)\n"
+"	return assert(ffi_safe_load(name, global))\n"
+"end\n"
+"\n"
+"local function ffi_string(ptr)\n"
+"	if ptr ~= nil then\n"
+"		return ffi.string(ptr)\n"
+"	end\n"
+"	return nil\n"
+"end\n"
+"\n"
+"local function ffi_string_len(ptr, len)\n"
+"	if ptr ~= nil then\n"
+"		return ffi.string(ptr, len)\n"
+"	end\n"
+"	return nil\n"
+"end\n"
+"\n"
+"local error = error\n"
 "local type = type\n"
 "local tonumber = tonumber\n"
 "local tostring = tostring\n"
+"local sformat = require\"string\".format\n"
 "local rawset = rawset\n"
+"local setmetatable = setmetatable\n"
+"local package = (require\"package\") or {}\n"
+"local p_config = package.config\n"
+"local p_cpath = package.cpath\n"
 "\n"
-"-- try loading luajit's ffi\n"
-"local stat, ffi=pcall(require,\"ffi\")\n"
-"if not stat then\n"
-"	return\n"
+"\n"
+"local ffi_load_cmodule\n"
+"\n"
+"-- try to detect luvit.\n"
+"if p_config == nil and p_cpath == nil then\n"
+"	ffi_load_cmodule = function(name, global)\n"
+"		for path,module in pairs(package.loaded) do\n"
+"			if module == name then\n"
+"				local C, err = ffi_safe_load(path, global)\n"
+"				-- return opened library\n"
+"				if C then return C end\n"
+"			end\n"
+"		end\n"
+"		error(\"Failed to find: \" .. name)\n"
+"	end\n"
+"else\n"
+"	ffi_load_cmodule = function(name, global)\n"
+"		local dir_sep = p_config:sub(1,1)\n"
+"		local path_sep = p_config:sub(3,3)\n"
+"		local path_mark = p_config:sub(5,5)\n"
+"		local path_match = \"([^\" .. path_sep .. \"]*)\" .. path_sep\n"
+"		-- convert dotted name to directory path.\n"
+"		name = name:gsub('%.', dir_sep)\n"
+"		-- try each path in search path.\n"
+"		for path in p_cpath:gmatch(path_match) do\n"
+"			local fname = path:gsub(path_mark, name)\n"
+"			local C, err = ffi_safe_load(fname, global)\n"
+"			-- return opened library\n"
+"			if C then return C end\n"
+"		end\n"
+"		error(\"Failed to find: \" .. name)\n"
+"	end\n"
 "end\n"
 "\n"
-"local _M, _priv, udata_new = ...\n"
-"\n"
-"local band = bit.band\n"
-"local d_getmetatable = debug.getmetatable\n"
-"local d_setmetatable = debug.setmetatable\n"
+"local _M, _priv, reg_table = ...\n"
+"local REG_MODULES_AS_GLOBALS = false\n"
+"local REG_OBJECTS_AS_GLOBALS = false\n"
+"local C = ffi.C\n"
 "\n"
 "local OBJ_UDATA_FLAG_OWN		= 1\n"
-"local OBJ_UDATA_FLAG_LOOKUP	= 2\n"
-"local OBJ_UDATA_LAST_FLAG		= OBJ_UDATA_FLAG_LOOKUP\n"
-"\n"
-"local OBJ_TYPE_FLAG_WEAK_REF	= 1\n"
-"local OBJ_TYPE_SIMPLE					= 2\n"
 "\n"
 "local function ffi_safe_cdef(block_name, cdefs)\n"
 "	local fake_type = \"struct sentinel_\" .. block_name .. \"_ty\"\n"
@@ -777,150 +1040,45 @@ static const char buf_ffi_lua_code[] = "local error = error\n"
 "	uint32_t flags;  /**< lua_own:1bit */\n"
 "} obj_udata;\n"
 "\n"
+"int memcmp(const void *s1, const void *s2, size_t n);\n"
+"\n"
 "]])\n"
 "\n"
-"-- cache mapping of cdata to userdata\n"
-"local weak_objects = setmetatable({}, { __mode = \"v\" })\n"
+"local nobj_callback_states = {}\n"
+"local nobj_weak_objects = setmetatable({}, {__mode = \"v\"})\n"
+"local nobj_obj_flags = {}\n"
 "\n"
-"local function obj_udata_luacheck_internal(obj, type_mt, not_delete)\n"
-"	local obj_mt = d_getmetatable(obj)\n"
-"	if obj_mt == type_mt then\n"
-"		-- convert userdata to cdata.\n"
-"		return ffi.cast(\"obj_udata *\", obj)\n"
+"local function obj_ptr_to_id(ptr)\n"
+"	return tonumber(ffi.cast('uintptr_t', ptr))\n"
+"end\n"
+"\n"
+"local function obj_to_id(ptr)\n"
+"	return tonumber(ffi.cast('uintptr_t', ffi.cast('void *', ptr)))\n"
+"end\n"
+"\n"
+"local function register_default_constructor(_pub, obj_name, constructor)\n"
+"	local obj_pub = _pub[obj_name]\n"
+"	if type(obj_pub) == 'table' then\n"
+"		-- copy table since it might have a locked metatable\n"
+"		local new_pub = {}\n"
+"		for k,v in pairs(obj_pub) do\n"
+"			new_pub[k] = v\n"
+"		end\n"
+"		setmetatable(new_pub, { __call = function(t,...)\n"
+"			return constructor(...)\n"
+"		end,\n"
+"		__metatable = false,\n"
+"		})\n"
+"		obj_pub = new_pub\n"
+"	else\n"
+"		obj_pub = constructor\n"
 "	end\n"
-"	if not_delete then\n"
-"		error(\"(expected `\" .. type_mt['.name'] .. \"`, got \" .. type(obj) .. \")\", 3)\n"
+"	_pub[obj_name] = obj_pub\n"
+"	_M[obj_name] = obj_pub\n"
+"	if REG_OBJECTS_AS_GLOBALS then\n"
+"		_G[obj_name] = obj_pub\n"
 "	end\n"
 "end\n"
-"\n"
-"local function obj_udata_luacheck(obj, type_mt)\n"
-"	local ud = obj_udata_luacheck_internal(obj, type_mt, true)\n"
-"	return ud.obj\n"
-"end\n"
-"\n"
-"local function obj_udata_to_cdata(objects, ud_obj, c_type, ud_mt)\n"
-"	-- convert userdata to cdata.\n"
-"	local c_obj = ffi.cast(c_type, obj_udata_luacheck(ud_obj, ud_mt))\n"
-"	-- cache converted cdata\n"
-"	rawset(objects, ud_obj, c_obj)\n"
-"	return c_obj\n"
-"end\n"
-"\n"
-"local function obj_udata_luadelete(ud_obj, type_mt)\n"
-"	local ud = obj_udata_luacheck_internal(ud_obj, type_mt, false)\n"
-"	if not ud then return nil, 0 end\n"
-"	local obj, flags = ud.obj, ud.flags\n"
-"	-- null userdata.\n"
-"	ud.obj = nil\n"
-"	ud.flags = 0\n"
-"	-- invalid userdata, by setting the metatable to nil.\n"
-"	d_setmetatable(ud_obj, nil)\n"
-"	return obj, flags\n"
-"end\n"
-"\n"
-"local function obj_udata_luapush(obj, type_mt, obj_type, flags)\n"
-"	if obj == nil then return end\n"
-"\n"
-"	-- apply type's dynamic caster.\n"
-"	if obj_type.dcaster ~= nil then\n"
-"		local obj_ptr = ffi.new(\"void *[1]\", obj)\n"
-"		local type_ptr = ffi.new(\"obj_type *[1]\", obj_type)\n"
-"		obj_type.dcaster(obj_ptr, type_ptr)\n"
-"		obj = obj_ptr[1]\n"
-"		type = type_ptr[1]\n"
-"	end\n"
-"\n"
-"	-- create new userdata\n"
-"	local ud_obj = udata_new(ffi.sizeof\"obj_udata\", type_mt)\n"
-"	local ud = ffi.cast(\"obj_udata *\", ud_obj)\n"
-"	-- init. object\n"
-"	ud.obj = obj\n"
-"	ud.flags = flags\n"
-"\n"
-"	return ud_obj\n"
-"end\n"
-"\n"
-"local function obj_udata_luadelete_weak(ud_obj, type_mt)\n"
-"	local ud = obj_udata_luacheck_internal(ud_obj, type_mt, false)\n"
-"	if not ud then return nil, 0 end\n"
-"	local obj, flags = ud.obj, ud.flags\n"
-"	-- null userdata.\n"
-"	ud.obj = nil\n"
-"	ud.flags = 0\n"
-"	-- invalid userdata, by setting the metatable to nil.\n"
-"	d_setmetatable(ud_obj, nil)\n"
-"	-- remove object from weak ref. table.\n"
-"	local obj_key = tonumber(ffi.cast('uintptr_t', obj))\n"
-"	weak_objects[obj_key] = nil\n"
-"	return obj, flags\n"
-"end\n"
-"\n"
-"local function obj_udata_luapush_weak(obj, type_mt, obj_type, flags)\n"
-"	if obj == nil then return end\n"
-"\n"
-"	-- apply type's dynamic caster.\n"
-"	if obj_type.dcaster ~= nil then\n"
-"		local obj_ptr = ffi.new(\"void *[1]\", obj)\n"
-"		local type_ptr = ffi.new(\"obj_type *[1]\", obj_type)\n"
-"		obj_type.dcaster(obj_ptr, type_ptr)\n"
-"		obj = obj_ptr[1]\n"
-"		type = type_ptr[1]\n"
-"	end\n"
-"\n"
-"	-- lookup object in weak ref. table.\n"
-"	local obj_key = tonumber(ffi.cast('uintptr_t', obj))\n"
-"	local ud_obj = weak_objects[obj_key]\n"
-"	if ud_obj ~= nil then return ud_obj end\n"
-"\n"
-"	-- create new userdata\n"
-"	ud_obj = udata_new(ffi.sizeof\"obj_udata\", type_mt)\n"
-"	local ud = ffi.cast(\"obj_udata *\", ud_obj)\n"
-"	-- init. object\n"
-"	ud.obj = obj\n"
-"	ud.flags = flags\n"
-"\n"
-"	-- cache weak reference to object.\n"
-"	weak_objects[obj_key] = ud_obj\n"
-"\n"
-"	return ud_obj\n"
-"end\n"
-"\n"
-"local function obj_simple_udata_luacheck(ud_obj, type_mt)\n"
-"	local obj_mt = d_getmetatable(ud_obj)\n"
-"	if obj_mt == type_mt then\n"
-"		-- convert userdata to cdata.\n"
-"		return ffi.cast(\"void *\", ud_obj)\n"
-"	end\n"
-"	error(\"(expected `\" .. type_mt['.name'] .. \"`, got \" .. type(ud_obj) .. \")\", 3)\n"
-"end\n"
-"\n"
-"local function obj_simple_udata_to_cdata(objects, ud_obj, c_type, ud_mt)\n"
-"	-- convert userdata to cdata.\n"
-"	local c_obj = ffi.cast(c_type, obj_simple_udata_luacheck(ud_obj, ud_mt))\n"
-"	-- cache converted cdata\n"
-"	rawset(objects, ud_obj, c_obj)\n"
-"	return c_obj\n"
-"end\n"
-"\n"
-"local function obj_simple_udata_luadelete(ud_obj, type_mt)\n"
-"	local c_obj = obj_simple_udata_luacheck(ud_obj, type_mt)\n"
-"	-- invalid userdata, by setting the metatable to nil.\n"
-"	d_setmetatable(ud_obj, nil)\n"
-"	return c_obj, OBJ_UDATA_FLAG_OWN\n"
-"end\n"
-"\n"
-"local function obj_simple_udata_luapush(c_obj, size, type_mt)\n"
-"	if c_obj == nil then return end\n"
-"\n"
-"	-- create new userdata\n"
-"	local ud_obj = udata_new(size, type_mt)\n"
-"	local cdata = ffi.cast(\"void *\", ud_obj)\n"
-"	-- init. object\n"
-"	ffi.copy(cdata, c_obj, size)\n"
-"\n"
-"	return ud_obj, cdata\n"
-"end\n"
-"\n"
 "ffi.cdef[[\n"
 "typedef struct LBuffer LBuffer;\n"
 "\n"
@@ -1016,14 +1174,22 @@ static const char buf_ffi_lua_code[] = "local error = error\n"
 "\n"
 "]]\n"
 "\n"
+"REG_MODULES_AS_GLOBALS = false\n"
+"REG_OBJECTS_AS_GLOBALS = false\n"
 "local _pub = {}\n"
 "local _meth = {}\n"
+"local _push = {}\n"
+"local _obj_subs = {}\n"
+"local _type_names = {}\n"
+"local _ctypes = {}\n"
 "for obj_name,mt in pairs(_priv) do\n"
-"	if type(mt) == 'table' and mt.__index then\n"
-"		_meth[obj_name] = mt.__index\n"
+"	if type(mt) == 'table' then\n"
+"		_obj_subs[obj_name] = {}\n"
+"		if mt.__index then\n"
+"			_meth[obj_name] = mt.__index\n"
+"		end\n"
 "	end\n"
 "end\n"
-"_pub.buf = _M\n"
 "for obj_name,pub in pairs(_M) do\n"
 "	_pub[obj_name] = pub\n"
 "end\n"
@@ -1033,35 +1199,55 @@ static const char buf_ffi_lua_code[] = "local error = error\n"
 "local obj_type_LBuffer_delete\n"
 "local obj_type_LBuffer_push\n"
 "\n"
-"(function()\n"
-"local LBuffer_mt = _priv.LBuffer\n"
-"local LBuffer_objects = setmetatable({}, { __mode = \"k\",\n"
-"__index = function(objects, ud_obj)\n"
-"	return obj_simple_udata_to_cdata(objects, ud_obj, \"LBuffer *\", LBuffer_mt)\n"
-"end,\n"
-"})\n"
-"function obj_type_LBuffer_check(ud_obj)\n"
-"	return LBuffer_objects[ud_obj]\n"
-"end\n"
+"do\n"
+"	local obj_mt = _priv.LBuffer\n"
+"	local obj_type = obj_mt['.type']\n"
+"	local obj_ctype = ffi.typeof(\"LBuffer\")\n"
+"	_ctypes.LBuffer = obj_ctype\n"
+"	_type_names.LBuffer = tostring(obj_ctype)\n"
+"	local LBuffer_sizeof = ffi.sizeof\"LBuffer\"\n"
 "\n"
-"function obj_type_LBuffer_delete(ud_obj)\n"
-"	LBuffer_objects[ud_obj] = nil\n"
-"	return obj_simple_udata_luadelete(ud_obj, LBuffer_mt)\n"
-"end\n"
+"	function obj_type_LBuffer_check(obj)\n"
+"		return obj\n"
+"	end\n"
 "\n"
-"local LBuffer_sizeof = ffi.sizeof\"LBuffer\"\n"
-"function obj_type_LBuffer_push(c_obj)\n"
-"	local ud_obj, cdata = obj_simple_udata_luapush(c_obj, LBuffer_sizeof, LBuffer_mt)\n"
-"	LBuffer_objects[ud_obj] = cdata\n"
-"	return ud_obj\n"
+"	function obj_type_LBuffer_delete(obj)\n"
+"		return obj\n"
+"	end\n"
+"\n"
+"	function obj_type_LBuffer_push(obj)\n"
+"		return obj\n"
+"	end\n"
+"\n"
+"	function obj_mt:__tostring()\n"
+"		return sformat(\"LBuffer: %p\", self)\n"
+"	end\n"
+"\n"
+"	function obj_mt.__eq(val1, val2)\n"
+"		if not ffi.istype(obj_type, val2) then return false end\n"
+"		assert(ffi.istype(obj_type, val1), \"expected LBuffer\")\n"
+"		return (C.memcmp(val1, val2, LBuffer_sizeof) == 0)\n"
+"	end\n"
+"\n"
+"	-- type checking function for C API.\n"
+"	_priv[obj_type] = function(obj)\n"
+"		if ffi.istype(obj_type, obj) then return obj end\n"
+"		return nil\n"
+"	end\n"
+"	-- push function for C API.\n"
+"	reg_table[obj_type] = function(ptr)\n"
+"		local obj = obj_ctype()\n"
+"		ffi.copy(obj, ptr, LBuffer_sizeof);\n"
+"		return obj\n"
+"	end\n"
+"\n"
 "end\n"
-"end)()\n"
 "\n"
 "\n"
 "local os_lib_table = {\n"
 "	[\"Windows\"] = \"liblbuffer\",\n"
 "}\n"
-"local C = ffi.load(os_lib_table[ffi.os] or \"lbuffer\")\n"
+"C = ffi_load(os_lib_table[ffi.os] or \"lbuffer\")\n"
 "\n"
 "\n"
 "-- Start \"LBuffer\" FFI interface\n"
@@ -1069,8 +1255,7 @@ static const char buf_ffi_lua_code[] = "local error = error\n"
 "\n"
 "-- method: new\n"
 "function _pub.LBuffer.new(size_or_data)\n"
-"  local this_flags = OBJ_UDATA_FLAG_OWN\n"
-"  local this\n"
+"  local self = ffi.new(\"LBuffer\")\n"
 "	local buf\n"
 "	local data\n"
 "	local len\n"
@@ -1083,64 +1268,61 @@ static const char buf_ffi_lua_code[] = "local error = error\n"
 "		len = size_or_data\n"
 "	end\n"
 "\n"
-"	this = LBuffer_tmp\n"
-"	C.l_buffer_init(this, data, len)\n"
+"	self = LBuffer_tmp\n"
+"	C.l_buffer_init(self, data, len)\n"
 "\n"
-"  this =   obj_type_LBuffer_push(this, this_flags)\n"
-"  return this\n"
+"  return obj_type_LBuffer_push(self)\n"
 "end\n"
+"register_default_constructor(_pub,\"LBuffer\",_pub.LBuffer.new)\n"
 "\n"
 "-- method: free\n"
 "function _meth.LBuffer.free(self)\n"
-"  local this,this_flags = obj_type_LBuffer_delete(self)\n"
-"  if(band(this_flags,OBJ_UDATA_FLAG_OWN) == 0) then return end\n"
-"  C.l_buffer_free(this)\n"
+"  local self = obj_type_LBuffer_delete(self)\n"
+"  if not self then return end\n"
+"  C.l_buffer_free(self)\n"
 "  return \n"
 "end\n"
+"_priv.LBuffer.__gc = _meth.LBuffer.free\n"
 "\n"
 "-- method: __tostring\n"
 "function _priv.LBuffer.__tostring(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local data_len = 0\n"
 "  local data\n"
-"  data = C.l_buffer_data(this)\n"
-"  data_len = C.l_buffer_length(this)\n"
-"  data = ((nil ~= data) and ffi.string(data,data_len))\n"
-"  return data\n"
+"  data = C.l_buffer_data(self)\n"
+"  data_len = C.l_buffer_length(self)\n"
+"  return ffi_string_len(data,data_len)\n"
 "end\n"
 "\n"
 "-- method: reset\n"
 "function _meth.LBuffer.reset(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
-"  C.l_buffer_reset(this)\n"
+"  \n"
+"  C.l_buffer_reset(self)\n"
 "  return \n"
 "end\n"
 "\n"
 "-- method: length\n"
 "function _meth.LBuffer.length(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
-"  local rc_l_buffer_length\n"
-"  rc_l_buffer_length = C.l_buffer_length(this)\n"
-"  rc_l_buffer_length = rc_l_buffer_length\n"
+"  \n"
+"  local rc_l_buffer_length = 0\n"
+"  rc_l_buffer_length = C.l_buffer_length(self)\n"
 "  return rc_l_buffer_length\n"
 "end\n"
 "\n"
 "-- method: set_length\n"
 "function _meth.LBuffer.set_length(self, len)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_set_length\n"
-"  rc_l_buffer_set_length = C.l_buffer_set_length(this, len)\n"
-"  rc_l_buffer_set_length = rc_l_buffer_set_length\n"
+"  \n"
+"  local rc_l_buffer_set_length = 0\n"
+"  rc_l_buffer_set_length = C.l_buffer_set_length(self, len)\n"
 "  return rc_l_buffer_set_length\n"
 "end\n"
 "\n"
 "-- method: data_ptr\n"
 "function _meth.LBuffer.data_ptr(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local rc_l_buffer_data\n"
-"  rc_l_buffer_data = C.l_buffer_data1(this)\n"
-"  rc_l_buffer_data = rc_l_buffer_data\n"
+"  rc_l_buffer_data = C.l_buffer_data1(self)\n"
 "  return rc_l_buffer_data\n"
 "end\n"
 "\n"
@@ -1148,408 +1330,388 @@ static const char buf_ffi_lua_code[] = "local error = error\n"
 "\n"
 "-- method: sub\n"
 "function _meth.LBuffer.sub(self, off, len)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "    off = off or 0\n"
 "    len = len or 0\n"
 "  local data_len = 0\n"
 "  local data\n"
 "	sub_len_tmp[0] = len;\n"
-"	data = C.l_buffer_sub(this, off, sub_len_tmp);\n"
+"	data = C.l_buffer_sub(self, off, sub_len_tmp);\n"
 "	data_len = sub_len_tmp[0];\n"
 "\n"
-"  data = ((nil ~= data) and ffi.string(data,data_len))\n"
-"  return data\n"
+"  return ffi_string_len(data,data_len)\n"
 "end\n"
 "\n"
 "-- method: size\n"
 "function _meth.LBuffer.size(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
-"  local rc_l_buffer_size\n"
-"  rc_l_buffer_size = C.l_buffer_size(this)\n"
-"  rc_l_buffer_size = rc_l_buffer_size\n"
+"  \n"
+"  local rc_l_buffer_size = 0\n"
+"  rc_l_buffer_size = C.l_buffer_size(self)\n"
 "  return rc_l_buffer_size\n"
 "end\n"
 "\n"
 "-- method: resize\n"
 "function _meth.LBuffer.resize(self, len)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_resize\n"
-"  rc_l_buffer_resize = C.l_buffer_resize(this, len)\n"
-"  rc_l_buffer_resize = rc_l_buffer_resize\n"
+"  \n"
+"  local rc_l_buffer_resize = 0\n"
+"  rc_l_buffer_resize = C.l_buffer_resize(self, len)\n"
 "  return rc_l_buffer_resize\n"
 "end\n"
 "\n"
 "-- method: read_data\n"
 "function _meth.LBuffer.read_data(self, len)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  \n"
 "  local data_len = 0\n"
 "  local data\n"
-"	data = C.l_buffer_read_data_len(this, len)\n"
+"	data = C.l_buffer_read_data_len(self, len)\n"
 "	data_len = len\n"
 "\n"
-"  data = ((nil ~= data) and ffi.string(data,data_len))\n"
-"  return data\n"
+"  return ffi_string_len(data,data_len)\n"
 "end\n"
 "\n"
 "local read_string_len_tmp = ffi.new(\"size_t[1]\")\n"
 "\n"
 "-- method: read_string\n"
 "function _meth.LBuffer.read_string(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local str_len = 0\n"
 "  local str\n"
 "	str_len = read_string_len_tmp\n"
-"	str = C.l_buffer_read_string_len(this, str_len)\n"
+"	str = C.l_buffer_read_string_len(self, str_len)\n"
 "	str_len = str_len[0]\n"
 "\n"
-"  str = ((nil ~= str) and ffi.string(str,str_len))\n"
-"  return str\n"
+"  return ffi_string_len(str,str_len)\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_uint8_num_tmp = ffi.new(\"uint8_t[1]\")\n"
 "-- method: read_uint8\n"
 "function _meth.LBuffer.read_uint8(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_uint8_num_tmp\n"
-"  local rc_l_buffer_read_uint8_t\n"
-"  rc_l_buffer_read_uint8_t = C.l_buffer_read_uint8_t(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_uint8_t = rc_l_buffer_read_uint8_t\n"
-"  return num, rc_l_buffer_read_uint8_t\n"
+"  local rc_l_buffer_read_uint8_t = 0\n"
+"  rc_l_buffer_read_uint8_t = C.l_buffer_read_uint8_t(self, num)\n"
+"  return num[0], rc_l_buffer_read_uint8_t\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_int8_num_tmp = ffi.new(\"int8_t[1]\")\n"
 "-- method: read_int8\n"
 "function _meth.LBuffer.read_int8(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_int8_num_tmp\n"
-"  local rc_l_buffer_read_uint8_t\n"
-"  rc_l_buffer_read_uint8_t = C.l_buffer_read_uint8_t1(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_uint8_t = rc_l_buffer_read_uint8_t\n"
-"  return num, rc_l_buffer_read_uint8_t\n"
+"  local rc_l_buffer_read_uint8_t = 0\n"
+"  rc_l_buffer_read_uint8_t = C.l_buffer_read_uint8_t1(self, num)\n"
+"  return num[0], rc_l_buffer_read_uint8_t\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_uint16_num_tmp = ffi.new(\"uint16_t[1]\")\n"
 "-- method: read_uint16\n"
 "function _meth.LBuffer.read_uint16(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_uint16_num_tmp\n"
-"  local rc_l_buffer_read_uint16_t\n"
-"  rc_l_buffer_read_uint16_t = C.l_buffer_read_uint16_t(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_uint16_t = rc_l_buffer_read_uint16_t\n"
-"  return num, rc_l_buffer_read_uint16_t\n"
+"  local rc_l_buffer_read_uint16_t = 0\n"
+"  rc_l_buffer_read_uint16_t = C.l_buffer_read_uint16_t(self, num)\n"
+"  return num[0], rc_l_buffer_read_uint16_t\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_int16_num_tmp = ffi.new(\"int16_t[1]\")\n"
 "-- method: read_int16\n"
 "function _meth.LBuffer.read_int16(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_int16_num_tmp\n"
-"  local rc_l_buffer_read_uint16_t\n"
-"  rc_l_buffer_read_uint16_t = C.l_buffer_read_uint16_t1(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_uint16_t = rc_l_buffer_read_uint16_t\n"
-"  return num, rc_l_buffer_read_uint16_t\n"
+"  local rc_l_buffer_read_uint16_t = 0\n"
+"  rc_l_buffer_read_uint16_t = C.l_buffer_read_uint16_t1(self, num)\n"
+"  return num[0], rc_l_buffer_read_uint16_t\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_uint32_num_tmp = ffi.new(\"uint32_t[1]\")\n"
 "-- method: read_uint32\n"
 "function _meth.LBuffer.read_uint32(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_uint32_num_tmp\n"
-"  local rc_l_buffer_read_uint32_t\n"
-"  rc_l_buffer_read_uint32_t = C.l_buffer_read_uint32_t(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_uint32_t = rc_l_buffer_read_uint32_t\n"
-"  return num, rc_l_buffer_read_uint32_t\n"
+"  local rc_l_buffer_read_uint32_t = 0\n"
+"  rc_l_buffer_read_uint32_t = C.l_buffer_read_uint32_t(self, num)\n"
+"  return num[0], rc_l_buffer_read_uint32_t\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_int32_num_tmp = ffi.new(\"int32_t[1]\")\n"
 "-- method: read_int32\n"
 "function _meth.LBuffer.read_int32(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_int32_num_tmp\n"
-"  local rc_l_buffer_read_uint32_t\n"
-"  rc_l_buffer_read_uint32_t = C.l_buffer_read_uint32_t1(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_uint32_t = rc_l_buffer_read_uint32_t\n"
-"  return num, rc_l_buffer_read_uint32_t\n"
+"  local rc_l_buffer_read_uint32_t = 0\n"
+"  rc_l_buffer_read_uint32_t = C.l_buffer_read_uint32_t1(self, num)\n"
+"  return num[0], rc_l_buffer_read_uint32_t\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_uint64_num_tmp = ffi.new(\"uint64_t[1]\")\n"
 "-- method: read_uint64\n"
 "function _meth.LBuffer.read_uint64(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_uint64_num_tmp\n"
-"  local rc_l_buffer_read_uint64_t\n"
-"  rc_l_buffer_read_uint64_t = C.l_buffer_read_uint64_t(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_uint64_t = rc_l_buffer_read_uint64_t\n"
-"  return num, rc_l_buffer_read_uint64_t\n"
+"  local rc_l_buffer_read_uint64_t = 0\n"
+"  rc_l_buffer_read_uint64_t = C.l_buffer_read_uint64_t(self, num)\n"
+"  return num[0], rc_l_buffer_read_uint64_t\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_int64_num_tmp = ffi.new(\"int64_t[1]\")\n"
 "-- method: read_int64\n"
 "function _meth.LBuffer.read_int64(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_int64_num_tmp\n"
-"  local rc_l_buffer_read_uint64_t\n"
-"  rc_l_buffer_read_uint64_t = C.l_buffer_read_uint64_t1(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_uint64_t = rc_l_buffer_read_uint64_t\n"
-"  return num, rc_l_buffer_read_uint64_t\n"
+"  local rc_l_buffer_read_uint64_t = 0\n"
+"  rc_l_buffer_read_uint64_t = C.l_buffer_read_uint64_t1(self, num)\n"
+"  return num[0], rc_l_buffer_read_uint64_t\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_float_num_tmp = ffi.new(\"float[1]\")\n"
 "-- method: read_float\n"
 "function _meth.LBuffer.read_float(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_float_num_tmp\n"
-"  local rc_l_buffer_read_float\n"
-"  rc_l_buffer_read_float = C.l_buffer_read_float(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_float = rc_l_buffer_read_float\n"
-"  return num, rc_l_buffer_read_float\n"
+"  local rc_l_buffer_read_float = 0\n"
+"  rc_l_buffer_read_float = C.l_buffer_read_float(self, num)\n"
+"  return num[0], rc_l_buffer_read_float\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_double_num_tmp = ffi.new(\"double[1]\")\n"
 "-- method: read_double\n"
 "function _meth.LBuffer.read_double(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_double_num_tmp\n"
-"  local rc_l_buffer_read_double\n"
-"  rc_l_buffer_read_double = C.l_buffer_read_double(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_double = rc_l_buffer_read_double\n"
-"  return num, rc_l_buffer_read_double\n"
+"  local rc_l_buffer_read_double = 0\n"
+"  rc_l_buffer_read_double = C.l_buffer_read_double(self, num)\n"
+"  return num[0], rc_l_buffer_read_double\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_b128_uvar32_num_tmp = ffi.new(\"uint32_t[1]\")\n"
 "-- method: read_b128_uvar32\n"
 "function _meth.LBuffer.read_b128_uvar32(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_b128_uvar32_num_tmp\n"
-"  local rc_l_buffer_read_b128_uvar32\n"
-"  rc_l_buffer_read_b128_uvar32 = C.l_buffer_read_b128_uvar32(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_b128_uvar32 = rc_l_buffer_read_b128_uvar32\n"
-"  return num, rc_l_buffer_read_b128_uvar32\n"
+"  local rc_l_buffer_read_b128_uvar32 = 0\n"
+"  rc_l_buffer_read_b128_uvar32 = C.l_buffer_read_b128_uvar32(self, num)\n"
+"  return num[0], rc_l_buffer_read_b128_uvar32\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_b128_var32_num_tmp = ffi.new(\"int32_t[1]\")\n"
 "-- method: read_b128_var32\n"
 "function _meth.LBuffer.read_b128_var32(self, zigzag)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "    zigzag = zigzag or 0\n"
 "  local num = read_b128_var32_num_tmp\n"
-"  local rc_l_buffer_read_b128_var32\n"
-"  rc_l_buffer_read_b128_var32 = C.l_buffer_read_b128_var32(this, num, zigzag)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_b128_var32 = rc_l_buffer_read_b128_var32\n"
-"  return num, rc_l_buffer_read_b128_var32\n"
+"  local rc_l_buffer_read_b128_var32 = 0\n"
+"  rc_l_buffer_read_b128_var32 = C.l_buffer_read_b128_var32(self, num, zigzag)\n"
+"  return num[0], rc_l_buffer_read_b128_var32\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_b128_uvar64_num_tmp = ffi.new(\"uint64_t[1]\")\n"
 "-- method: read_b128_uvar64\n"
 "function _meth.LBuffer.read_b128_uvar64(self)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local num = read_b128_uvar64_num_tmp\n"
-"  local rc_l_buffer_read_b128_uvar64\n"
-"  rc_l_buffer_read_b128_uvar64 = C.l_buffer_read_b128_uvar64(this, num)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_b128_uvar64 = rc_l_buffer_read_b128_uvar64\n"
-"  return num, rc_l_buffer_read_b128_uvar64\n"
+"  local rc_l_buffer_read_b128_uvar64 = 0\n"
+"  rc_l_buffer_read_b128_uvar64 = C.l_buffer_read_b128_uvar64(self, num)\n"
+"  return num[0], rc_l_buffer_read_b128_uvar64\n"
+"end\n"
 "end\n"
 "\n"
+"do\n"
 "  local read_b128_var64_num_tmp = ffi.new(\"int64_t[1]\")\n"
 "-- method: read_b128_var64\n"
 "function _meth.LBuffer.read_b128_var64(self, zigzag)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "    zigzag = zigzag or 0\n"
 "  local num = read_b128_var64_num_tmp\n"
-"  local rc_l_buffer_read_b128_var64\n"
-"  rc_l_buffer_read_b128_var64 = C.l_buffer_read_b128_var64(this, num, zigzag)\n"
-"  num = num\n"
-"[0]  rc_l_buffer_read_b128_var64 = rc_l_buffer_read_b128_var64\n"
-"  return num, rc_l_buffer_read_b128_var64\n"
+"  local rc_l_buffer_read_b128_var64 = 0\n"
+"  rc_l_buffer_read_b128_var64 = C.l_buffer_read_b128_var64(self, num, zigzag)\n"
+"  return num[0], rc_l_buffer_read_b128_var64\n"
+"end\n"
 "end\n"
 "\n"
 "-- method: append_data\n"
 "function _meth.LBuffer.append_data(self, data)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local data_len = #data\n"
-"  local rc_l_buffer_append_data_len\n"
-"  rc_l_buffer_append_data_len = C.l_buffer_append_data_len(this, data, data_len)\n"
-"  rc_l_buffer_append_data_len = rc_l_buffer_append_data_len\n"
+"  local rc_l_buffer_append_data_len = 0\n"
+"  rc_l_buffer_append_data_len = C.l_buffer_append_data_len(self, data, data_len)\n"
 "  return rc_l_buffer_append_data_len\n"
 "end\n"
 "\n"
 "-- method: append_string\n"
 "function _meth.LBuffer.append_string(self, str)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  local str_len = #str\n"
-"  local rc_l_buffer_append_string_len\n"
-"  rc_l_buffer_append_string_len = C.l_buffer_append_string_len(this, str, str_len)\n"
-"  rc_l_buffer_append_string_len = rc_l_buffer_append_string_len\n"
+"  local rc_l_buffer_append_string_len = 0\n"
+"  rc_l_buffer_append_string_len = C.l_buffer_append_string_len(self, str, str_len)\n"
 "  return rc_l_buffer_append_string_len\n"
 "end\n"
 "\n"
 "-- method: append_uint8\n"
 "function _meth.LBuffer.append_uint8(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_uint8_t\n"
-"  rc_l_buffer_append_uint8_t = C.l_buffer_append_uint8_t(this, num)\n"
-"  rc_l_buffer_append_uint8_t = rc_l_buffer_append_uint8_t\n"
+"  \n"
+"  local rc_l_buffer_append_uint8_t = 0\n"
+"  rc_l_buffer_append_uint8_t = C.l_buffer_append_uint8_t(self, num)\n"
 "  return rc_l_buffer_append_uint8_t\n"
 "end\n"
 "\n"
 "-- method: append_int8\n"
 "function _meth.LBuffer.append_int8(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_uint8_t\n"
-"  rc_l_buffer_append_uint8_t = C.l_buffer_append_uint8_t1(this, num)\n"
-"  rc_l_buffer_append_uint8_t = rc_l_buffer_append_uint8_t\n"
+"  \n"
+"  local rc_l_buffer_append_uint8_t = 0\n"
+"  rc_l_buffer_append_uint8_t = C.l_buffer_append_uint8_t1(self, num)\n"
 "  return rc_l_buffer_append_uint8_t\n"
 "end\n"
 "\n"
 "-- method: append_uint16\n"
 "function _meth.LBuffer.append_uint16(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_uint16_t\n"
-"  rc_l_buffer_append_uint16_t = C.l_buffer_append_uint16_t(this, num)\n"
-"  rc_l_buffer_append_uint16_t = rc_l_buffer_append_uint16_t\n"
+"  \n"
+"  local rc_l_buffer_append_uint16_t = 0\n"
+"  rc_l_buffer_append_uint16_t = C.l_buffer_append_uint16_t(self, num)\n"
 "  return rc_l_buffer_append_uint16_t\n"
 "end\n"
 "\n"
 "-- method: append_int16\n"
 "function _meth.LBuffer.append_int16(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_uint16_t\n"
-"  rc_l_buffer_append_uint16_t = C.l_buffer_append_uint16_t1(this, num)\n"
-"  rc_l_buffer_append_uint16_t = rc_l_buffer_append_uint16_t\n"
+"  \n"
+"  local rc_l_buffer_append_uint16_t = 0\n"
+"  rc_l_buffer_append_uint16_t = C.l_buffer_append_uint16_t1(self, num)\n"
 "  return rc_l_buffer_append_uint16_t\n"
 "end\n"
 "\n"
 "-- method: append_uint32\n"
 "function _meth.LBuffer.append_uint32(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_uint32_t\n"
-"  rc_l_buffer_append_uint32_t = C.l_buffer_append_uint32_t(this, num)\n"
-"  rc_l_buffer_append_uint32_t = rc_l_buffer_append_uint32_t\n"
+"  \n"
+"  local rc_l_buffer_append_uint32_t = 0\n"
+"  rc_l_buffer_append_uint32_t = C.l_buffer_append_uint32_t(self, num)\n"
 "  return rc_l_buffer_append_uint32_t\n"
 "end\n"
 "\n"
 "-- method: append_int32\n"
 "function _meth.LBuffer.append_int32(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_uint32_t\n"
-"  rc_l_buffer_append_uint32_t = C.l_buffer_append_uint32_t1(this, num)\n"
-"  rc_l_buffer_append_uint32_t = rc_l_buffer_append_uint32_t\n"
+"  \n"
+"  local rc_l_buffer_append_uint32_t = 0\n"
+"  rc_l_buffer_append_uint32_t = C.l_buffer_append_uint32_t1(self, num)\n"
 "  return rc_l_buffer_append_uint32_t\n"
 "end\n"
 "\n"
 "-- method: append_uint64\n"
 "function _meth.LBuffer.append_uint64(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_uint64_t\n"
-"  rc_l_buffer_append_uint64_t = C.l_buffer_append_uint64_t(this, num)\n"
-"  rc_l_buffer_append_uint64_t = rc_l_buffer_append_uint64_t\n"
+"  \n"
+"  local rc_l_buffer_append_uint64_t = 0\n"
+"  rc_l_buffer_append_uint64_t = C.l_buffer_append_uint64_t(self, num)\n"
 "  return rc_l_buffer_append_uint64_t\n"
 "end\n"
 "\n"
 "-- method: append_int64\n"
 "function _meth.LBuffer.append_int64(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_uint64_t\n"
-"  rc_l_buffer_append_uint64_t = C.l_buffer_append_uint64_t1(this, num)\n"
-"  rc_l_buffer_append_uint64_t = rc_l_buffer_append_uint64_t\n"
+"  \n"
+"  local rc_l_buffer_append_uint64_t = 0\n"
+"  rc_l_buffer_append_uint64_t = C.l_buffer_append_uint64_t1(self, num)\n"
 "  return rc_l_buffer_append_uint64_t\n"
 "end\n"
 "\n"
 "-- method: append_float\n"
 "function _meth.LBuffer.append_float(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_float\n"
-"  rc_l_buffer_append_float = C.l_buffer_append_float(this, num)\n"
-"  rc_l_buffer_append_float = rc_l_buffer_append_float\n"
+"  \n"
+"  local rc_l_buffer_append_float = 0\n"
+"  rc_l_buffer_append_float = C.l_buffer_append_float(self, num)\n"
 "  return rc_l_buffer_append_float\n"
 "end\n"
 "\n"
 "-- method: append_double\n"
 "function _meth.LBuffer.append_double(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_double\n"
-"  rc_l_buffer_append_double = C.l_buffer_append_double(this, num)\n"
-"  rc_l_buffer_append_double = rc_l_buffer_append_double\n"
+"  \n"
+"  local rc_l_buffer_append_double = 0\n"
+"  rc_l_buffer_append_double = C.l_buffer_append_double(self, num)\n"
 "  return rc_l_buffer_append_double\n"
 "end\n"
 "\n"
 "-- method: append_b128_uvar32\n"
 "function _meth.LBuffer.append_b128_uvar32(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_b128_uvar32\n"
-"  rc_l_buffer_append_b128_uvar32 = C.l_buffer_append_b128_uvar32(this, num)\n"
-"  rc_l_buffer_append_b128_uvar32 = rc_l_buffer_append_b128_uvar32\n"
+"  \n"
+"  local rc_l_buffer_append_b128_uvar32 = 0\n"
+"  rc_l_buffer_append_b128_uvar32 = C.l_buffer_append_b128_uvar32(self, num)\n"
 "  return rc_l_buffer_append_b128_uvar32\n"
 "end\n"
 "\n"
 "-- method: append_b128_var32\n"
 "function _meth.LBuffer.append_b128_var32(self, num, zigzag)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  \n"
 "    zigzag = zigzag or 0\n"
-"  local rc_l_buffer_append_b128_var32\n"
-"  rc_l_buffer_append_b128_var32 = C.l_buffer_append_b128_var32(this, num, zigzag)\n"
-"  rc_l_buffer_append_b128_var32 = rc_l_buffer_append_b128_var32\n"
+"  local rc_l_buffer_append_b128_var32 = 0\n"
+"  rc_l_buffer_append_b128_var32 = C.l_buffer_append_b128_var32(self, num, zigzag)\n"
 "  return rc_l_buffer_append_b128_var32\n"
 "end\n"
 "\n"
 "-- method: append_b128_uvar64\n"
 "function _meth.LBuffer.append_b128_uvar64(self, num)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
 "  \n"
-"  local rc_l_buffer_append_b128_uvar64\n"
-"  rc_l_buffer_append_b128_uvar64 = C.l_buffer_append_b128_uvar64(this, num)\n"
-"  rc_l_buffer_append_b128_uvar64 = rc_l_buffer_append_b128_uvar64\n"
+"  \n"
+"  local rc_l_buffer_append_b128_uvar64 = 0\n"
+"  rc_l_buffer_append_b128_uvar64 = C.l_buffer_append_b128_uvar64(self, num)\n"
 "  return rc_l_buffer_append_b128_uvar64\n"
 "end\n"
 "\n"
 "-- method: append_b128_var64\n"
 "function _meth.LBuffer.append_b128_var64(self, num, zigzag)\n"
-"  local this = obj_type_LBuffer_check(self)\n"
+"  \n"
 "  \n"
 "    zigzag = zigzag or 0\n"
-"  local rc_l_buffer_append_b128_var64\n"
-"  rc_l_buffer_append_b128_var64 = C.l_buffer_append_b128_var64(this, num, zigzag)\n"
-"  rc_l_buffer_append_b128_var64 = rc_l_buffer_append_b128_var64\n"
+"  local rc_l_buffer_append_b128_var64 = 0\n"
+"  rc_l_buffer_append_b128_var64 = C.l_buffer_append_b128_var64(self, num, zigzag)\n"
 "  return rc_l_buffer_append_b128_var64\n"
 "end\n"
 "\n"
+"_push.LBuffer = obj_type_LBuffer_push\n"
+"ffi.metatype(\"LBuffer\", _priv.LBuffer)\n"
 "-- End \"LBuffer\" FFI interface\n"
 "\n"
 "";
 
 
-
 /* method: new */
 static int LBuffer__new__meth(lua_State *L) {
-  int this_flags = OBJ_UDATA_FLAG_OWN;
-  LBuffer * this;
+  LBuffer this_store;
+  LBuffer * this = &(this_store);
 	LBuffer buf;
 	const uint8_t *data = NULL;
 	size_t len = 0;
@@ -1564,15 +1726,13 @@ static int LBuffer__new__meth(lua_State *L) {
 	this = &buf;
 	l_buffer_init(this, data, len);
 
-  obj_type_LBuffer_push(L, this, this_flags);
+  obj_type_LBuffer_push(L, this);
   return 1;
 }
 
 /* method: free */
 static int LBuffer__free__meth(lua_State *L) {
-  int this_flags = 0;
-  LBuffer * this = obj_type_LBuffer_delete(L,1,&(this_flags));
-  if(!(this_flags & OBJ_UDATA_FLAG_OWN)) { return 0; }
+  LBuffer * this = obj_type_LBuffer_delete(L,1);
   l_buffer_free(this);
   return 0;
 }
@@ -2002,8 +2162,8 @@ static int LBuffer__append_b128_var64__meth(lua_State *L) {
 
 /* method: new */
 static int buf__new__func(lua_State *L) {
-  int this_flags = OBJ_UDATA_FLAG_OWN;
-  LBuffer * this;
+  LBuffer this_store;
+  LBuffer * this = &(this_store);
 	LBuffer buf;
 	const uint8_t *data = NULL;
 	size_t len = 0;
@@ -2018,7 +2178,7 @@ static int buf__new__func(lua_State *L) {
 	this = &buf;
 	l_buffer_init(this, data, len);
 
-  obj_type_LBuffer_push(L, this, this_flags);
+  obj_type_LBuffer_push(L, this);
   return 1;
 }
 
@@ -2101,19 +2261,22 @@ static const obj_const buf_constants[] = {
   {NULL, NULL, 0.0 , 0}
 };
 
-static const ffi_export_symbol buf_ffi_export[] = {
-  {NULL, NULL}
-};
-
 
 
 static const reg_sub_module reg_sub_modules[] = {
-  { &(obj_type_LBuffer), 0, obj_LBuffer_pub_funcs, obj_LBuffer_methods, obj_LBuffer_metas, obj_LBuffer_bases, obj_LBuffer_fields, obj_LBuffer_constants},
-  {NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL}
+  { &(obj_type_LBuffer), REG_OBJECT, obj_LBuffer_pub_funcs, obj_LBuffer_methods, obj_LBuffer_metas, obj_LBuffer_bases, obj_LBuffer_fields, obj_LBuffer_constants, 0},
+  {NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, 0}
 };
 
 
 
+
+
+#if LUAJIT_FFI
+static const ffi_export_symbol buf_ffi_export[] = {
+  {NULL, { NULL } }
+};
+#endif
 
 
 
@@ -2148,20 +2311,26 @@ LUA_NOBJ_API int luaopen_buf(lua_State *L) {
 	const luaL_Reg *submodules = submodule_libs;
 	int priv_table = -1;
 
-#if LUAJIT_FFI
 	/* private table to hold reference to object metatables. */
 	lua_newtable(L);
 	priv_table = lua_gettop(L);
-#endif
+	lua_pushlightuserdata(L, obj_udata_private_key);
+	lua_pushvalue(L, priv_table);
+	lua_rawset(L, LUA_REGISTRYINDEX);  /* store private table in registry. */
 
 	/* create object cache. */
 	create_object_instance_cache(L);
 
 	/* module table. */
+#if REG_MODULES_AS_GLOBALS
 	luaL_register(L, "buf", buf_function);
+#else
+	lua_newtable(L);
+	luaL_register(L, NULL, buf_function);
+#endif
 
 	/* register module constants. */
-	obj_type_register_constants(L, buf_constants, -1);
+	obj_type_register_constants(L, buf_constants, -1, 0);
 
 	for(; submodules->func != NULL ; submodules++) {
 		lua_pushcfunction(L, submodules->func);
@@ -2182,9 +2351,14 @@ LUA_NOBJ_API int luaopen_buf(lua_State *L) {
 	}
 
 #if LUAJIT_FFI
-	nobj_try_loading_ffi(L, "buf", buf_ffi_lua_code,
-		buf_ffi_export, priv_table);
+	if(nobj_check_ffi_support(L)) {
+		nobj_try_loading_ffi(L, "buf", buf_ffi_lua_code,
+			buf_ffi_export, priv_table);
+	}
 #endif
+
+
+
 	return 1;
 }
 
