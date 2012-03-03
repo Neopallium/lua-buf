@@ -287,9 +287,29 @@ finished:
 	return rc;
 }
 
+typedef struct {
+	const char **ffi_init_code;
+	int offset;
+} nobj_reader_state;
+
+static const char *nobj_lua_Reader(lua_State *L, void *data, size_t *size) {
+	nobj_reader_state *state = (nobj_reader_state *)data;
+	const char *ptr;
+
+	ptr = state->ffi_init_code[state->offset];
+	if(ptr != NULL) {
+		*size = strlen(ptr);
+		state->offset++;
+	} else {
+		*size = 0;
+	}
+	return ptr;
+}
+
 static int nobj_try_loading_ffi(lua_State *L, const char *ffi_mod_name,
-		const char *ffi_init_code, const ffi_export_symbol *ffi_exports, int priv_table)
+		const char *ffi_init_code[], const ffi_export_symbol *ffi_exports, int priv_table)
 {
+	nobj_reader_state state = { ffi_init_code, 0 };
 	int err;
 
 	/* export symbols to priv_table. */
@@ -299,7 +319,7 @@ static int nobj_try_loading_ffi(lua_State *L, const char *ffi_mod_name,
 		lua_settable(L, priv_table);
 		ffi_exports++;
 	}
-	err = luaL_loadbuffer(L, ffi_init_code, strlen(ffi_init_code), ffi_mod_name);
+	err = lua_load(L, nobj_lua_Reader, &state, ffi_mod_name);
 	if(0 == err) {
 		lua_pushvalue(L, -2); /* dup C module's table. */
 		lua_pushvalue(L, priv_table); /* move priv_table to top of stack. */
@@ -929,7 +949,7 @@ static FUNC_UNUSED int lua_checktype_ref(lua_State *L, int _index, int _type) {
 
 
 
-static const char buf_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
+static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "local function ffi_safe_load(name, global)\n"
 "	local stat, C = pcall(ffi.load, name, global)\n"
 "	if not stat then return nil, C end\n"
@@ -1507,7 +1527,7 @@ static const char buf_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "\n"
 "do\n"
 "  local read_b128_uvar32_num_tmp = ffi.new(\"uint32_t[1]\")\n"
-"-- method: read_b128_uvar32\n"
+"-- method: read_b128_uvar32\n", /* ----- CUT ----- */
 "function _meth.LBuffer.read_b128_uvar32(self)\n"
 "  \n"
 "  local num = read_b128_uvar32_num_tmp\n"
@@ -1704,8 +1724,7 @@ static const char buf_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "_push.LBuffer = obj_type_LBuffer_push\n"
 "ffi.metatype(\"LBuffer\", _priv.LBuffer)\n"
 "-- End \"LBuffer\" FFI interface\n"
-"\n"
-"";
+"\n", NULL };
 
 
 /* method: new */
