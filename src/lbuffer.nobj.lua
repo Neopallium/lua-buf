@@ -87,6 +87,10 @@ local LBuffer_tmp = ffi.new("LBuffer")
 		c_method_call { "const char *", "data" } "l_buffer_data" {},
 		c_method_call { "size_t", "#data" } "l_buffer_length" {}
 	},
+	method "tostring" {
+		c_method_call { "const char *", "data" } "l_buffer_data" {},
+		c_method_call { "size_t", "#data" } "l_buffer_length" {}
+	},
 
 	method "reset" {
 		c_method_call "void" "l_buffer_reset" {}

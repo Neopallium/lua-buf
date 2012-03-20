@@ -296,6 +296,7 @@ static const char *nobj_lua_Reader(lua_State *L, void *data, size_t *size) {
 	nobj_reader_state *state = (nobj_reader_state *)data;
 	const char *ptr;
 
+	(void)L;
 	ptr = state->ffi_init_code[state->offset];
 	if(ptr != NULL) {
 		*size = strlen(ptr);
@@ -468,7 +469,7 @@ static FUNC_UNUSED void *obj_udata_luacheck(lua_State *L, int _index, obj_type *
 
 static FUNC_UNUSED void *obj_udata_luaoptional(lua_State *L, int _index, obj_type *type) {
 	void *obj = NULL;
-	if(lua_isnil(L, _index)) {
+	if(lua_gettop(L) < _index) {
 		return obj;
 	}
 	obj_udata_luacheck_internal(L, _index, &(obj), type, 1);
@@ -676,7 +677,7 @@ static FUNC_UNUSED void * obj_simple_udata_luacheck(lua_State *L, int _index, ob
 }
 
 static FUNC_UNUSED void * obj_simple_udata_luaoptional(lua_State *L, int _index, obj_type *type) {
-	if(lua_isnil(L, _index)) {
+	if(lua_gettop(L) < _index) {
 		return NULL;
 	}
 	return obj_simple_udata_luacheck(L, _index, type);
@@ -1314,6 +1315,16 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "  return ffi_string_len(data,data_len)\n"
 "end\n"
 "\n"
+"-- method: tostring\n"
+"function _meth.LBuffer.tostring(self)\n"
+"  \n"
+"  local data_len = 0\n"
+"  local data\n"
+"  data = C.l_buffer_data(self)\n"
+"  data_len = C.l_buffer_length(self)\n"
+"  return ffi_string_len(data,data_len)\n"
+"end\n"
+"\n"
 "-- method: reset\n"
 "function _meth.LBuffer.reset(self)\n"
 "  \n"
@@ -1518,7 +1529,7 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "-- method: read_double\n"
 "function _meth.LBuffer.read_double(self)\n"
 "  \n"
-"  local num = read_double_num_tmp\n"
+"  local num = read_double_num_tmp\n", /* ----- CUT ----- */
 "  local rc_l_buffer_read_double = 0\n"
 "  rc_l_buffer_read_double = C.l_buffer_read_double(self, num)\n"
 "  return num[0], rc_l_buffer_read_double\n"
@@ -1527,7 +1538,7 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "\n"
 "do\n"
 "  local read_b128_uvar32_num_tmp = ffi.new(\"uint32_t[1]\")\n"
-"-- method: read_b128_uvar32\n", /* ----- CUT ----- */
+"-- method: read_b128_uvar32\n"
 "function _meth.LBuffer.read_b128_uvar32(self)\n"
 "  \n"
 "  local num = read_b128_uvar32_num_tmp\n"
@@ -1758,6 +1769,17 @@ static int LBuffer__free__meth(lua_State *L) {
 
 /* method: __tostring */
 static int LBuffer____tostring__meth(lua_State *L) {
+  LBuffer * this = obj_type_LBuffer_check(L,1);
+  size_t data_len = 0;
+  const char * data = NULL;
+  data = l_buffer_data(this);
+  data_len = l_buffer_length(this);
+  if(data == NULL) lua_pushnil(L);  else lua_pushlstring(L, data,data_len);
+  return 1;
+}
+
+/* method: tostring */
+static int LBuffer__tostring__meth(lua_State *L) {
   LBuffer * this = obj_type_LBuffer_check(L,1);
   size_t data_len = 0;
   const char * data = NULL;
@@ -2210,6 +2232,7 @@ static const luaL_reg obj_LBuffer_pub_funcs[] = {
 
 static const luaL_reg obj_LBuffer_methods[] = {
   {"free", LBuffer__free__meth},
+  {"tostring", LBuffer__tostring__meth},
   {"reset", LBuffer__reset__meth},
   {"length", LBuffer__length__meth},
   {"set_length", LBuffer__set_length__meth},

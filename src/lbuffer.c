@@ -17,12 +17,13 @@ void l_buffer_init(LBuffer *buf, const uint8_t *data, size_t len) {
 
 	/* initialize buffer object. */
 	buf->tail = 0;
-	buf->head = len;
+	buf->head = 0;
 	buf->size = size;
 	buf->data = (uint8_t *)malloc(sizeof(uint8_t) * size);
 	if(data) {
 		/* copy data into buffer. */
 		memcpy(buf->data, data, len);
+		buf->head = len;
 	}
 	buf->free_struct = 0;
 }
@@ -134,6 +135,13 @@ L_INLINE uint8_t *l_buffer_get_head(LBuffer *buf, size_t need) {
 uint8_t *l_buffer_sub(LBuffer *buf, size_t off, size_t *plen) {
 	size_t len;
 
+	/* if `off` beyond end of the buffer. */
+	if(off > buf->head) {
+		if(plen) {
+			*plen = 0;
+		}
+		return NULL;
+	}
 	if(plen) {
 		/* get requested length. */
 		len = *plen;
@@ -142,10 +150,6 @@ uint8_t *l_buffer_sub(LBuffer *buf, size_t off, size_t *plen) {
 		if(len == 0 || (off + len) > buf->head) {
 			*plen = buf->head - off;
 		}
-	}
-	/* if `off` beyond end of the buffer. */
-	if(off > buf->head) {
-		return NULL;
 	}
 	return buf->data + off;
 }
