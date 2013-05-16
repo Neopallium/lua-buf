@@ -1,6 +1,8 @@
 lua-buf
 =======
 
+[![travis-ci status](https://secure.travis-ci.org/Neopallium/lua-buf.png?branch=master)](http://travis-ci.org/Neopallium/lua-buf/builds)
+
 Mutable buffer object.
 
 TODO
