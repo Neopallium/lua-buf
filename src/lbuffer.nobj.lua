@@ -96,7 +96,7 @@ local LBuffer_tmp = ffi.new("LBuffer")
 		c_method_call "void" "l_buffer_reset" {}
 	},
 	method "length" {
-		c_method_call "size_t" "l_buffer_length" {}
+		c_method_call { "size_t", "size", ffi_wrap = "tonumber" } "l_buffer_length" {}
 	},
 	method "set_length" {
 		c_method_call "bool" "l_buffer_set_length" { "size_t", "len" }
@@ -122,7 +122,7 @@ local sub_len_tmp = ffi.new("size_t[1]")
 ]],
 	},
 	method "size" {
-		c_method_call "size_t" "l_buffer_size" {}
+		c_method_call { "size_t", "size", ffi_wrap = "tonumber" } "l_buffer_size" {}
 	},
 	method "resize" {
 		c_method_call "bool" "l_buffer_resize" { "size_t", "len" }
