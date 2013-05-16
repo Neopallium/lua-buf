@@ -27,233 +27,59 @@ function tohex(buf)
 	return out
 end
 
+local function append_vals(buf, ctype, vals, zig)
+	local append = assert(buf['append_' .. ctype])
+	for i=1,#vals do
+		local val = vals[i]
+		print("append " .. (zig and 'zigzag ' or '') .. ctype ..":", val, append(buf, val, zig))
+	end
+end
+
+local function read_vals(buf, ctype, vals, zig)
+	local read = assert(buf['read_' .. ctype])
+	for i=1,#vals do
+		local val = vals[i]
+		if ctype == 'data' then
+			print("read data:", val, read(buf, #val))
+		else
+			print("read " .. (zig and 'zigzag ' or '') .. ctype ..":", val, read(buf, zig))
+		end
+	end
+end
+
+local function run_test(test)
+	local ctype = test[1]
+	local vals = test[2]
+	local zig = test[3]
+	append_vals(buf, ctype, vals, zig)
+	print("data = [\n" .. tohex(buf) .. "]")
+	read_vals(buf, ctype, vals, zig)
+	print("length:", buf:length())
+end
+
 -- Test append/read
 buf:reset()
-	-- test uint8
-print("append uint8:", buf:append_uint8(65))
-print("append uint8:", buf:append_uint8(66))
-print("append uint8:", buf:append_uint8(67))
-print("append uint8:", buf:append_uint8(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read uint8:", buf:read_uint8())
-print("read uint8:", buf:read_uint8())
-print("read uint8:", buf:read_uint8())
-print("read uint8:", buf:read_uint8())
-print("length:", buf:length())
-	-- test uint16
-print("append uint16:", buf:append_uint16(123))
-print("append uint16:", buf:append_uint16(1234))
-print("append uint16:", buf:append_uint16(123456789))
-print("append uint16:", buf:append_uint16(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read uint16:", buf:read_uint16())
-print("read uint16:", buf:read_uint16())
-print("read uint16:", buf:read_uint16())
-print("read uint16:", buf:read_uint16())
-print("length:", buf:length())
-	-- test uint32
-print("append uint32:", buf:append_uint32(123))
-print("append uint32:", buf:append_uint32(1234))
-print("append uint32:", buf:append_uint32(123456789))
-print("append uint32:", buf:append_uint32(1234567890123))
-print("append uint32:", buf:append_uint32(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read uint32:", buf:read_uint32())
-print("read uint32:", buf:read_uint32())
-print("read uint32:", buf:read_uint32())
-print("read uint32:", buf:read_uint32())
-print("read uint32:", buf:read_uint32())
-print("length:", buf:length())
-	-- test uint64
-print("append uint64:", buf:append_uint64(123))
-print("append uint64:", buf:append_uint64(1234))
-print("append uint64:", buf:append_uint64(123456789))
-print("append uint64:", buf:append_uint64(1234567890123))
-print("append uint64:", buf:append_uint64(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read uint64:", buf:read_uint64())
-print("read uint64:", buf:read_uint64())
-print("read uint64:", buf:read_uint64())
-print("read uint64:", buf:read_uint64())
-print("read uint64:", buf:read_uint64())
-print("length:", buf:length())
-	-- test int8
-print("append int8:", buf:append_int8(65))
-print("append int8:", buf:append_int8(66))
-print("append int8:", buf:append_int8(67))
-print("append int8:", buf:append_int8(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read int8:", buf:read_int8())
-print("read int8:", buf:read_int8())
-print("read int8:", buf:read_int8())
-print("read int8:", buf:read_int8())
-print("length:", buf:length())
-	-- test int16
-print("append int16:", buf:append_int16(123))
-print("append int16:", buf:append_int16(1234))
-print("append int16:", buf:append_int16(123456789))
-print("append int16:", buf:append_int16(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read int16:", buf:read_int16())
-print("read int16:", buf:read_int16())
-print("read int16:", buf:read_int16())
-print("read int16:", buf:read_int16())
-print("length:", buf:length())
-	-- test int32
-print("append int32:", buf:append_int32(123))
-print("append int32:", buf:append_int32(1234))
-print("append int32:", buf:append_int32(123456789))
-print("append int32:", buf:append_int32(1234567890123))
-print("append int32:", buf:append_int32(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read int32:", buf:read_int32())
-print("read int32:", buf:read_int32())
-print("read int32:", buf:read_int32())
-print("read int32:", buf:read_int32())
-print("read int32:", buf:read_int32())
-print("length:", buf:length())
-	-- test int64
-print("append int64:", buf:append_int64(123))
-print("append int64:", buf:append_int64(1234))
-print("append int64:", buf:append_int64(123456789))
-print("append int64:", buf:append_int64(1234567890123))
-print("append int64:", buf:append_int64(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read int64:", buf:read_int64())
-print("read int64:", buf:read_int64())
-print("read int64:", buf:read_int64())
-print("read int64:", buf:read_int64())
-print("read int64:", buf:read_int64())
-print("length:", buf:length())
-	-- test float
-print("append float:", buf:append_float(12.3))
-print("append float:", buf:append_float(12.34))
-print("append float:", buf:append_float(12.3456789))
-print("append float:", buf:append_float(12.34567890123))
-print("append float:", buf:append_float(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read float:", buf:read_float())
-print("read float:", buf:read_float())
-print("read float:", buf:read_float())
-print("read float:", buf:read_float())
-print("read float:", buf:read_float())
-print("length:", buf:length())
-	-- test double
-print("append double:", buf:append_double(12.3))
-print("append double:", buf:append_double(12.34))
-print("append double:", buf:append_double(12.3456789))
-print("append double:", buf:append_double(12.34567890123))
-print("append double:", buf:append_double(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read double:", buf:read_double())
-print("read double:", buf:read_double())
-print("read double:", buf:read_double())
-print("read double:", buf:read_double())
-print("read double:", buf:read_double())
-print("length:", buf:length())
-
-	-- test b128_uvar32
-print("append b128_uvar32:", buf:append_b128_uvar32(123))
-print("append b128_uvar32:", buf:append_b128_uvar32(1234))
-print("append b128_uvar32:", buf:append_b128_uvar32(123456789))
-print("append b128_uvar32:", buf:append_b128_uvar32(1234567890123))
-print("append b128_uvar32:", buf:append_b128_uvar32(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read b128_uvar32:", buf:read_b128_uvar32())
-print("read b128_uvar32:", buf:read_b128_uvar32())
-print("read b128_uvar32:", buf:read_b128_uvar32())
-print("read b128_uvar32:", buf:read_b128_uvar32())
-print("read b128_uvar32:", buf:read_b128_uvar32())
-print("length:", buf:length())
-	-- test b128_uvar64
-print("append b128_uvar64:", buf:append_b128_uvar64(123))
-print("append b128_uvar64:", buf:append_b128_uvar64(1234))
-print("append b128_uvar64:", buf:append_b128_uvar64(123456789))
-print("append b128_uvar64:", buf:append_b128_uvar64(1234567890123))
-print("append b128_uvar64:", buf:append_b128_uvar64(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read b128_uvar64:", buf:read_b128_uvar64())
-print("read b128_uvar64:", buf:read_b128_uvar64())
-print("read b128_uvar64:", buf:read_b128_uvar64())
-print("read b128_uvar64:", buf:read_b128_uvar64())
-print("read b128_uvar64:", buf:read_b128_uvar64())
-print("length:", buf:length())
-	-- test b128_var32
-print("append b128_var32:", buf:append_b128_var32(123))
-print("append b128_var32:", buf:append_b128_var32(1234))
-print("append b128_var32:", buf:append_b128_var32(123456789))
-print("append b128_var32:", buf:append_b128_var32(1234567890123))
-print("append b128_var32:", buf:append_b128_var32(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read b128_var32:", buf:read_b128_var32())
-print("read b128_var32:", buf:read_b128_var32())
-print("read b128_var32:", buf:read_b128_var32())
-print("read b128_var32:", buf:read_b128_var32())
-print("read b128_var32:", buf:read_b128_var32())
-print("length:", buf:length())
-	-- test b128_var64
-print("append b128_var64:", buf:append_b128_var64(123))
-print("append b128_var64:", buf:append_b128_var64(1234))
-print("append b128_var64:", buf:append_b128_var64(123456789))
-print("append b128_var64:", buf:append_b128_var64(1234567890123))
-print("append b128_var64:", buf:append_b128_var64(-1))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read b128_var64:", buf:read_b128_var64())
-print("read b128_var64:", buf:read_b128_var64())
-print("read b128_var64:", buf:read_b128_var64())
-print("read b128_var64:", buf:read_b128_var64())
-print("read b128_var64:", buf:read_b128_var64())
-print("length:", buf:length())
-	-- test b128_var32 zigzag encode
-print("append zigzag b128_var32:", buf:append_b128_var32(123, true))
-print("append zigzag b128_var32:", buf:append_b128_var32(1234, true))
-print("append zigzag b128_var32:", buf:append_b128_var32(123456789, true))
-print("append zigzag b128_var32:", buf:append_b128_var32(1234567890123, true))
-print("append zigzag b128_var32:", buf:append_b128_var32(-1, true))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read zigzag b128_var32:", buf:read_b128_var32(true))
-print("read zigzag b128_var32:", buf:read_b128_var32(true))
-print("read zigzag b128_var32:", buf:read_b128_var32(true))
-print("read zigzag b128_var32:", buf:read_b128_var32(true))
-print("read zigzag b128_var32:", buf:read_b128_var32(true))
-print("length:", buf:length())
-	-- test zigzag b128_var64 zigzag encode
-print("append zigzag b128_var64:", buf:append_b128_var64(123, true))
-print("append zigzag b128_var64:", buf:append_b128_var64(1234, true))
-print("append zigzag b128_var64:", buf:append_b128_var64(123456789, true))
-print("append zigzag b128_var64:", buf:append_b128_var64(1234567890123, true))
-print("append zigzag b128_var64:", buf:append_b128_var64(-1, true))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read zigzag b128_var64:", buf:read_b128_var64(true))
-print("read zigzag b128_var64:", buf:read_b128_var64(true))
-print("read zigzag b128_var64:", buf:read_b128_var64(true))
-print("read zigzag b128_var64:", buf:read_b128_var64(true))
-print("read zigzag b128_var64:", buf:read_b128_var64(true))
-print("length:", buf:length())
-
-	-- test append data (doesn't append null-byte)
-print("append data:", buf:append_data("123"))
-print("append data:", buf:append_data(" Hello"))
-print("append data:", buf:append_data(", world"))
-print("append data:", buf:append_data("!"))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read data:", buf:read_data(3))
-print("read data:", buf:read_data(6))
-print("read data:", buf:read_data(7))
-print("read data:", buf:read_data(1))
-print("length:", buf:length())
-
-	-- test append null-terminated strings
-print("append string:", buf:append_string("123"))
-print("append string:", buf:append_string(" Hello"))
-print("append string:", buf:append_string(", world"))
-print("append string:", buf:append_string("!"))
-print("data = [\n" .. tohex(buf) .. "]")
-print("read string:", buf:read_string())
-print("read string:", buf:read_string())
-print("read string:", buf:read_string())
-print("read string:", buf:read_string())
-print("length:", buf:length())
+local tests = {
+	{ 'uint8',       { 65, 66, 67, -1 }, },
+	{ 'uint16',      { 123, 1234, 123456789, -1 }, },
+	{ 'uint32',      { 123, 1234, 123456789, 1234567890123, -1 }, },
+	{ 'uint64',      { 123, 1234, 123456789, 1234567890123, -1 }, },
+	{ 'int8',        { 65, 66, 67, -1 }, },
+	{ 'int16',       { 123, 1234, 123456789, -1 }, },
+	{ 'int32',       { 123, 1234, 123456789, 1234567890123, -1 }, },
+	{ 'int64',       { 123, 1234, 123456789, 1234567890123, -1 }, },
+	{ 'float',       { 12.3, 12.34, 12.3456789, 12.34567890123, -1 }, },
+	{ 'double',      { 12.3, 12.34, 12.3456789, 12.34567890123, -1 }, },
+	{ 'b128_uvar32', { 123, 1234, 123456789, 1234567890123, -1 }, },
+	{ 'b128_uvar64', { 123, 1234, 123456789, 1234567890123, -1 }, },
+	{ 'b128_var32',  { 123, 1234, 123456789, 1234567890123, -1 }, },
+	{ 'b128_var64',  { 123, 1234, 123456789, 1234567890123, -1 }, },
+	{ 'b128_var32',  { 123, 1234, 123456789, 1234567890123, -1 }, true, },
+	{ 'b128_var64',  { 123, 1234, 123456789, 1234567890123, -1 }, true, },
+	{ 'data',        { "123", " Hello", ", world", "!" }, },
+	{ 'string',      { "123", " Hello", ", world", "!" }, },
+}
+for n=1,#tests do run_test(tests[n]) end
 
 -- test growing the buffer.
 local size = buf:size()
