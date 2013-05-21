@@ -21,6 +21,22 @@
 object "LBuffer" {
 	-- store the `LBuffer` structure in the Lua userdata object.
 	userdata_type = "embed",
+	implements "Buffer" {
+		implement_method "const_data" {
+			c_function = "l_buffer_data"
+		},
+		implement_method "get_size" {
+			c_function = "l_buffer_length"
+		},
+	},
+	implements "MutableBuffer" {
+		implement_method "data" {
+			c_function = "l_buffer_data"
+		},
+		implement_method "get_size" {
+			c_function = "l_buffer_size"
+		},
+	},
 
 	include "lbuffer.h",
 	ffi_cdef[[
