@@ -1347,8 +1347,106 @@ static FUNC_UNUSED void *nobj_delete_callback_state(lua_State *L, int owner_idx)
 
 
 
+
+
+typedef struct Buffer_if {
+  const uint8_t * (* const const_data)(void *this_v);
+  size_t (* const get_size)(void *this_v);
+} BufferIF;
+
+/* a per-module unique pointer for fast lookup of an interface's implementation table. */
+static char obj_interface_BufferIF[] = "BufferIF";
+
+#define BufferIF_VAR(var_name) \
+	BufferIF *var_name ## _if; \
+	void *var_name;
+
+#define BufferIF_LUA_OPTIONAL(L, _index, var_name) \
+	var_name = obj_implement_luaoptional(L, _index, (void **)&(var_name ## _if), \
+		obj_interface_BufferIF)
+
+#define BufferIF_LUA_CHECK(L, _index, var_name) \
+	var_name = obj_implement_luacheck(L, _index, (void **)&(var_name ## _if), \
+		obj_interface_BufferIF)
+
+
+
+
+
+
+typedef struct MutableBuffer_if {
+  uint8_t * (* const data)(void *this_v);
+  size_t (* const get_size)(void *this_v);
+} MutableBufferIF;
+
+/* a per-module unique pointer for fast lookup of an interface's implementation table. */
+static char obj_interface_MutableBufferIF[] = "MutableBufferIF";
+
+#define MutableBufferIF_VAR(var_name) \
+	MutableBufferIF *var_name ## _if; \
+	void *var_name;
+
+#define MutableBufferIF_LUA_OPTIONAL(L, _index, var_name) \
+	var_name = obj_implement_luaoptional(L, _index, (void **)&(var_name ## _if), \
+		obj_interface_MutableBufferIF)
+
+#define MutableBufferIF_LUA_CHECK(L, _index, var_name) \
+	var_name = obj_implement_luacheck(L, _index, (void **)&(var_name ## _if), \
+		obj_interface_MutableBufferIF)
+
+
+
+
 static char *obj_interfaces[] = {
+  obj_interface_BufferIF,
+  obj_interface_MutableBufferIF,
   NULL,
+};
+
+/**
+ * LBuffer implements Buffer interface
+ */
+/** 
+ * Buffer interface method const_data
+ */
+static const uint8_t * LBuffer_Buffer_const_data(void *this_v) {
+  LBuffer * this_p = this_v;
+  return l_buffer_data(this_p);
+}
+/** 
+ * Buffer interface method get_size
+ */
+static size_t LBuffer_Buffer_get_size(void *this_v) {
+  LBuffer * this_p = this_v;
+  return l_buffer_length(this_p);
+}
+
+static const BufferIF LBuffer_Buffer = {
+  LBuffer_Buffer_const_data,
+  LBuffer_Buffer_get_size
+};
+
+/**
+ * LBuffer implements MutableBuffer interface
+ */
+/** 
+ * MutableBuffer interface method data
+ */
+static uint8_t * LBuffer_MutableBuffer_data(void *this_v) {
+  LBuffer * this_p = this_v;
+  return l_buffer_data(this_p);
+}
+/** 
+ * MutableBuffer interface method get_size
+ */
+static size_t LBuffer_MutableBuffer_get_size(void *this_v) {
+  LBuffer * this_p = this_v;
+  return l_buffer_size(this_p);
+}
+
+static const MutableBufferIF LBuffer_MutableBuffer = {
+  LBuffer_MutableBuffer_data,
+  LBuffer_MutableBuffer_get_size
 };
 
 
@@ -1519,18 +1617,25 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "	end\n"
 "end\n"
 "\n"
-"ffi_safe_cdef(\"MutableBufferIF\", [[\n"
-"typedef struct MutableBuffer_if {\n"
-"  uint8_t * (* const data)(void *this_v);\n"
-"  size_t (* const get_size)(void *this_v);\n"
-"} MutableBufferIF;\n"
-"]])\n"
-"\n"
 "ffi_safe_cdef(\"BufferIF\", [[\n"
 "typedef struct Buffer_if {\n"
 "  const uint8_t * (* const const_data)(void *this_v);\n"
 "  size_t (* const get_size)(void *this_v);\n"
 "} BufferIF;\n"
+"]])\n"
+"\n"
+"ffi_safe_cdef(\"FDIF\", [[\n"
+"typedef struct FD_if {\n"
+"  int (* const get_fd)(void *this_v);\n"
+"  int (* const get_type)(void *this_v);\n"
+"} FDIF;\n"
+"]])\n"
+"\n"
+"ffi_safe_cdef(\"MutableBufferIF\", [[\n"
+"typedef struct MutableBuffer_if {\n"
+"  uint8_t * (* const data)(void *this_v);\n"
+"  size_t (* const get_size)(void *this_v);\n"
+"} MutableBufferIF;\n"
 "]])\n"
 "\n"
 "local Cmod = ffi_load_cmodule(\"buf\", false)\n"
@@ -1554,16 +1659,10 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "	uint32_t  _free_struct: 1;  /**< Should the LBuffer struct be freed. */\n"
 "};\n"
 "\n"
-"uint8_t *l_buffer_sub(LBuffer *buf, size_t off, size_t *plen);\n"
-"\n"
-"const uint8_t *l_buffer_read_data_len(LBuffer *buf, size_t len);\n"
-"\n"
-"const char *l_buffer_read_string_len(LBuffer *buf, size_t *plen);\n"
-"\n"
 "\n"
 "void l_buffer_free(LBuffer *);\n"
 "\n"
-"const char * l_buffer_data(LBuffer *);\n"
+"char * l_buffer_data(LBuffer *);\n"
 "\n"
 "size_t l_buffer_length(LBuffer *);\n"
 "\n"
@@ -1572,9 +1671,15 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "bool l_buffer_set_length(LBuffer *, size_t);\n"
 "\n"
 "void * l_buffer_data1(LBuffer *) asm(\"l_buffer_data\");\n"
+"const char * l_buffer_sub(LBuffer *, size_t, size_t*);\n"
+"\n"
 "size_t l_buffer_size(LBuffer *);\n"
 "\n"
 "bool l_buffer_resize(LBuffer *, size_t);\n"
+"\n"
+"const char * l_buffer_read_data_len(LBuffer *, size_t);\n"
+"\n"
+"const char * l_buffer_read_string_len(LBuffer *, size_t*);\n"
 "\n"
 "int l_buffer_read_uint8_t(LBuffer *, uint8_t*);\n"
 "\n"
@@ -1627,6 +1732,8 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "int l_buffer_append_b128_uvar64(LBuffer *, uint64_t);\n"
 "\n"
 "int l_buffer_append_b128_var64(LBuffer *, int64_t, bool);\n"
+"\n"
+"void l_buffer_init(LBuffer *, const uint8_t *, size_t);\n"
 "\n"
 "\n"
 "]]\n"
@@ -1774,14 +1881,14 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "	end\n"
 "\n"
 "	function obj_mt.__eq(val1, val2)\n"
-"		if not ffi.istype(obj_type, val2) then return false end\n"
-"		assert(ffi.istype(obj_type, val1), \"expected LBuffer\")\n"
+"		if not ffi.istype(obj_ctype, val2) then return false end\n"
+"		assert(ffi.istype(obj_ctype, val1), \"expected LBuffer\")\n"
 "		return (C.memcmp(val1, val2, LBuffer_sizeof) == 0)\n"
 "	end\n"
 "\n"
 "	-- type checking function for C API.\n"
 "	local function c_check(obj)\n"
-"		if ffi.istype(obj_type, obj) then return obj end\n"
+"		if ffi.istype(obj_ctype, obj) then return obj end\n"
 "		return nil\n"
 "	end\n"
 "	_priv[obj_type] = c_check\n"
@@ -1798,38 +1905,17 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "end\n"
 "\n"
 "\n"
-"local obj_type_MutableBuffer_check =\n"
-"	obj_get_interface_check(\"MutableBufferIF\", \"Expected object with MutableBuffer interface\")\n"
-"\n"
 "local obj_type_Buffer_check =\n"
 "	obj_get_interface_check(\"BufferIF\", \"Expected object with Buffer interface\")\n"
 "\n"
+"local obj_type_FD_check =\n"
+"	obj_get_interface_check(\"FDIF\", \"Expected object with FD interface\")\n"
+"\n"
+"local obj_type_MutableBuffer_check =\n"
+"	obj_get_interface_check(\"MutableBufferIF\", \"Expected object with MutableBuffer interface\")\n"
+"\n"
 "\n"
 "-- Start \"LBuffer\" FFI interface\n"
-"local LBuffer_tmp = ffi.new(\"LBuffer\")\n"
-"\n"
-"-- method: new\n"
-"function _pub.LBuffer.new(size_or_data)\n"
-"  local self = ffi.new(\"LBuffer\")\n"
-"	local buf\n"
-"	local data\n"
-"	local len\n"
-"	local ltype = type(size_or_data)\n"
-"\n"
-"	if ltype == 'string' then\n"
-"		data = size_or_data\n"
-"		len = #data\n"
-"	elseif ltype == 'number' then\n"
-"		len = size_or_data\n"
-"	end\n"
-"\n"
-"	self = LBuffer_tmp\n"
-"	C.l_buffer_init(self, data, len)\n"
-"\n"
-"  return obj_type_LBuffer_push(self)\n"
-"end\n"
-"register_default_constructor(_pub,\"LBuffer\",_pub.LBuffer.new)\n"
-"\n"
 "-- method: free\n"
 "function _meth.LBuffer.free(self)\n"
 "  local self = obj_type_LBuffer_delete(self)\n"
@@ -1874,6 +1960,14 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "  return tonumber(size)\n"
 "end\n"
 "\n"
+"-- method: __len\n"
+"function _priv.LBuffer.__len(self)\n"
+"  \n"
+"  local size = 0\n"
+"  size = C.l_buffer_length(self)\n"
+"  return tonumber(size)\n"
+"end\n"
+"\n"
 "-- method: set_length\n"
 "function _meth.LBuffer.set_length(self, len)\n"
 "  \n"
@@ -1891,20 +1985,20 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "  return rc_l_buffer_data\n"
 "end\n"
 "\n"
-"local sub_len_tmp = ffi.new(\"size_t[1]\")\n"
+"do\n"
+"  local sub_len_tmp = ffi.new(\"size_t[1]\")\n"
 "\n"
 "-- method: sub\n"
 "function _meth.LBuffer.sub(self, off, len)\n"
 "  \n"
 "  off = off or 0\n"
 "  len = len or 0\n"
-"  local data_len = 0\n"
 "  local data\n"
-"	sub_len_tmp[0] = len;\n"
-"	data = C.l_buffer_sub(self, off, sub_len_tmp);\n"
-"	data_len = sub_len_tmp[0];\n"
-"\n"
-"  return ffi_string_len(data,data_len)\n"
+"  sub_len_tmp[0] = len\n"
+"  data = C.l_buffer_sub(self, off, sub_len_tmp)\n"
+"  len = sub_len_tmp[0]\n"
+"  return ffi_string_len(data,len)\n"
+"end\n"
 "end\n"
 "\n"
 "-- method: size\n"
@@ -1928,195 +2022,220 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "function _meth.LBuffer.read_data(self, len)\n"
 "  \n"
 "  \n"
-"  local data_len = 0\n"
 "  local data\n"
-"	data = C.l_buffer_read_data_len(self, len)\n"
-"	data_len = len\n"
-"\n", /* ----- CUT ----- */
-"  return ffi_string_len(data,data_len)\n"
+"  data = C.l_buffer_read_data_len(self, len)\n"
+"  return ffi_string_len(data,len)\n"
 "end\n"
 "\n"
-"local read_string_len_tmp = ffi.new(\"size_t[1]\")\n"
+"do\n"
+"  local read_string_str_tmp = ffi.new(\"size_t[1]\")\n"
 "\n"
 "-- method: read_string\n"
 "function _meth.LBuffer.read_string(self)\n"
-"  \n"
+"  \n", /* ----- CUT ----- */
 "  local str_len = 0\n"
 "  local str\n"
-"	str_len = read_string_len_tmp\n"
-"	str = C.l_buffer_read_string_len(self, str_len)\n"
-"	str_len = str_len[0]\n"
-"\n"
+"  str = C.l_buffer_read_string_len(self, read_string_str_tmp)\n"
+"  str_len = read_string_str_tmp[0]\n"
 "  return ffi_string_len(str,str_len)\n"
+"end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_uint8_num_tmp = ffi.new(\"uint8_t[1]\")\n"
+"\n"
 "-- method: read_uint8\n"
 "function _meth.LBuffer.read_uint8(self)\n"
 "  \n"
-"  local num = read_uint8_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_uint8_t = 0\n"
-"  rc_l_buffer_read_uint8_t = C.l_buffer_read_uint8_t(self, num)\n"
-"  return num[0], rc_l_buffer_read_uint8_t\n"
+"  rc_l_buffer_read_uint8_t = C.l_buffer_read_uint8_t(self, read_uint8_num_tmp)\n"
+"  num = read_uint8_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_uint8_t\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_int8_num_tmp = ffi.new(\"int8_t[1]\")\n"
+"\n"
 "-- method: read_int8\n"
 "function _meth.LBuffer.read_int8(self)\n"
 "  \n"
-"  local num = read_int8_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_uint8_t = 0\n"
-"  rc_l_buffer_read_uint8_t = C.l_buffer_read_uint8_t1(self, num)\n"
-"  return num[0], rc_l_buffer_read_uint8_t\n"
+"  rc_l_buffer_read_uint8_t = C.l_buffer_read_uint8_t1(self, read_int8_num_tmp)\n"
+"  num = read_int8_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_uint8_t\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_uint16_num_tmp = ffi.new(\"uint16_t[1]\")\n"
+"\n"
 "-- method: read_uint16\n"
 "function _meth.LBuffer.read_uint16(self)\n"
 "  \n"
-"  local num = read_uint16_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_uint16_t = 0\n"
-"  rc_l_buffer_read_uint16_t = C.l_buffer_read_uint16_t(self, num)\n"
-"  return num[0], rc_l_buffer_read_uint16_t\n"
+"  rc_l_buffer_read_uint16_t = C.l_buffer_read_uint16_t(self, read_uint16_num_tmp)\n"
+"  num = read_uint16_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_uint16_t\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_int16_num_tmp = ffi.new(\"int16_t[1]\")\n"
+"\n"
 "-- method: read_int16\n"
 "function _meth.LBuffer.read_int16(self)\n"
 "  \n"
-"  local num = read_int16_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_uint16_t = 0\n"
-"  rc_l_buffer_read_uint16_t = C.l_buffer_read_uint16_t1(self, num)\n"
-"  return num[0], rc_l_buffer_read_uint16_t\n"
+"  rc_l_buffer_read_uint16_t = C.l_buffer_read_uint16_t1(self, read_int16_num_tmp)\n"
+"  num = read_int16_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_uint16_t\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_uint32_num_tmp = ffi.new(\"uint32_t[1]\")\n"
+"\n"
 "-- method: read_uint32\n"
 "function _meth.LBuffer.read_uint32(self)\n"
 "  \n"
-"  local num = read_uint32_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_uint32_t = 0\n"
-"  rc_l_buffer_read_uint32_t = C.l_buffer_read_uint32_t(self, num)\n"
-"  return num[0], rc_l_buffer_read_uint32_t\n"
+"  rc_l_buffer_read_uint32_t = C.l_buffer_read_uint32_t(self, read_uint32_num_tmp)\n"
+"  num = read_uint32_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_uint32_t\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_int32_num_tmp = ffi.new(\"int32_t[1]\")\n"
+"\n"
 "-- method: read_int32\n"
 "function _meth.LBuffer.read_int32(self)\n"
 "  \n"
-"  local num = read_int32_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_uint32_t = 0\n"
-"  rc_l_buffer_read_uint32_t = C.l_buffer_read_uint32_t1(self, num)\n"
-"  return num[0], rc_l_buffer_read_uint32_t\n"
+"  rc_l_buffer_read_uint32_t = C.l_buffer_read_uint32_t1(self, read_int32_num_tmp)\n"
+"  num = read_int32_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_uint32_t\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_uint64_num_tmp = ffi.new(\"uint64_t[1]\")\n"
+"\n"
 "-- method: read_uint64\n"
 "function _meth.LBuffer.read_uint64(self)\n"
 "  \n"
-"  local num = read_uint64_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_uint64_t = 0\n"
-"  rc_l_buffer_read_uint64_t = C.l_buffer_read_uint64_t(self, num)\n"
-"  return num[0], rc_l_buffer_read_uint64_t\n"
+"  rc_l_buffer_read_uint64_t = C.l_buffer_read_uint64_t(self, read_uint64_num_tmp)\n"
+"  num = read_uint64_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_uint64_t\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_int64_num_tmp = ffi.new(\"int64_t[1]\")\n"
+"\n"
 "-- method: read_int64\n"
 "function _meth.LBuffer.read_int64(self)\n"
 "  \n"
-"  local num = read_int64_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_uint64_t = 0\n"
-"  rc_l_buffer_read_uint64_t = C.l_buffer_read_uint64_t1(self, num)\n"
-"  return num[0], rc_l_buffer_read_uint64_t\n"
+"  rc_l_buffer_read_uint64_t = C.l_buffer_read_uint64_t1(self, read_int64_num_tmp)\n"
+"  num = read_int64_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_uint64_t\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_float_num_tmp = ffi.new(\"float[1]\")\n"
+"\n"
 "-- method: read_float\n"
 "function _meth.LBuffer.read_float(self)\n"
 "  \n"
-"  local num = read_float_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_float = 0\n"
-"  rc_l_buffer_read_float = C.l_buffer_read_float(self, num)\n"
-"  return num[0], rc_l_buffer_read_float\n"
+"  rc_l_buffer_read_float = C.l_buffer_read_float(self, read_float_num_tmp)\n"
+"  num = read_float_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_float\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_double_num_tmp = ffi.new(\"double[1]\")\n"
+"\n"
 "-- method: read_double\n"
 "function _meth.LBuffer.read_double(self)\n"
 "  \n"
-"  local num = read_double_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_double = 0\n"
-"  rc_l_buffer_read_double = C.l_buffer_read_double(self, num)\n"
-"  return num[0], rc_l_buffer_read_double\n"
+"  rc_l_buffer_read_double = C.l_buffer_read_double(self, read_double_num_tmp)\n"
+"  num = read_double_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_double\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_b128_uvar32_num_tmp = ffi.new(\"uint32_t[1]\")\n"
+"\n"
 "-- method: read_b128_uvar32\n"
 "function _meth.LBuffer.read_b128_uvar32(self)\n"
 "  \n"
-"  local num = read_b128_uvar32_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_b128_uvar32 = 0\n"
-"  rc_l_buffer_read_b128_uvar32 = C.l_buffer_read_b128_uvar32(self, num)\n"
-"  return num[0], rc_l_buffer_read_b128_uvar32\n"
+"  rc_l_buffer_read_b128_uvar32 = C.l_buffer_read_b128_uvar32(self, read_b128_uvar32_num_tmp)\n"
+"  num = read_b128_uvar32_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_b128_uvar32\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_b128_var32_num_tmp = ffi.new(\"int32_t[1]\")\n"
+"\n"
 "-- method: read_b128_var32\n"
 "function _meth.LBuffer.read_b128_var32(self, zigzag)\n"
 "  \n"
 "  zigzag = zigzag or 0\n"
-"  local num = read_b128_var32_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_b128_var32 = 0\n"
-"  rc_l_buffer_read_b128_var32 = C.l_buffer_read_b128_var32(self, num, zigzag)\n"
-"  return num[0], rc_l_buffer_read_b128_var32\n"
+"  rc_l_buffer_read_b128_var32 = C.l_buffer_read_b128_var32(self, read_b128_var32_num_tmp, zigzag)\n"
+"  num = read_b128_var32_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_b128_var32\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_b128_uvar64_num_tmp = ffi.new(\"uint64_t[1]\")\n"
+"\n"
 "-- method: read_b128_uvar64\n"
 "function _meth.LBuffer.read_b128_uvar64(self)\n"
 "  \n"
-"  local num = read_b128_uvar64_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_b128_uvar64 = 0\n"
-"  rc_l_buffer_read_b128_uvar64 = C.l_buffer_read_b128_uvar64(self, num)\n"
-"  return num[0], rc_l_buffer_read_b128_uvar64\n"
+"  rc_l_buffer_read_b128_uvar64 = C.l_buffer_read_b128_uvar64(self, read_b128_uvar64_num_tmp)\n"
+"  num = read_b128_uvar64_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_b128_uvar64\n"
 "end\n"
 "end\n"
 "\n"
 "do\n"
 "  local read_b128_var64_num_tmp = ffi.new(\"int64_t[1]\")\n"
+"\n"
 "-- method: read_b128_var64\n"
 "function _meth.LBuffer.read_b128_var64(self, zigzag)\n"
 "  \n"
 "  zigzag = zigzag or 0\n"
-"  local num = read_b128_var64_num_tmp\n"
+"  local num\n"
 "  local rc_l_buffer_read_b128_var64 = 0\n"
-"  rc_l_buffer_read_b128_var64 = C.l_buffer_read_b128_var64(self, num, zigzag)\n"
-"  return num[0], rc_l_buffer_read_b128_var64\n"
+"  rc_l_buffer_read_b128_var64 = C.l_buffer_read_b128_var64(self, read_b128_var64_num_tmp, zigzag)\n"
+"  num = read_b128_var64_num_tmp[0]\n"
+"  return num, rc_l_buffer_read_b128_var64\n"
 "end\n"
 "end\n"
 "\n"
@@ -2266,33 +2385,47 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "  return rc_l_buffer_append_b128_var64\n"
 "end\n"
 "\n"
+"-- LBuffer implements Buffer interface\n"
+"do\n"
+"  local impl_meths = obj_register_interface(\"BufferIF\", \"LBuffer\")\n"
+"-- Buffer interface method const_data\n"
+"impl_meths.const_data = C.l_buffer_data\n"
+"-- Buffer interface method get_size\n"
+"impl_meths.get_size = C.l_buffer_length\n"
+"end\n"
+"\n"
+"-- LBuffer implements MutableBuffer interface\n"
+"do\n"
+"  local impl_meths = obj_register_interface(\"MutableBufferIF\", \"LBuffer\")\n"
+"-- MutableBuffer interface method data\n"
+"impl_meths.data = C.l_buffer_data\n"
+"-- MutableBuffer interface method get_size\n"
+"impl_meths.get_size = C.l_buffer_size\n"
+"end\n"
+"\n"
 "_push.LBuffer = obj_type_LBuffer_push\n"
 "ffi.metatype(\"LBuffer\", _priv.LBuffer)\n"
 "-- End \"LBuffer\" FFI interface\n"
+"\n"
+"-- method: new\n"
+"function _M.new(size_or_data)\n"
+"  local buf = ffi.new(\"LBuffer\")\n"
+"  local data\n"
+"  local len = 0\n"
+"	local ltype = type(size_or_data)\n"
+"\n"
+"	if ltype == 'string' then\n"
+"		data = size_or_data\n"
+"		len = #data\n"
+"	elseif ltype == 'number' then\n"
+"		len = size_or_data\n"
+"	end\n"
+"\n"
+"  C.l_buffer_init(buf, data, len)\n"
+"  return obj_type_LBuffer_push(buf)\n"
+"end\n"
 "\n", NULL };
 
-
-/* method: new */
-static int LBuffer__new__meth(lua_State *L) {
-  LBuffer this_store;
-  LBuffer * this = &(this_store);
-	LBuffer buf;
-	const uint8_t *data = NULL;
-	size_t len = 0;
-	int ltype = lua_type(L, 1);
-
-	if(ltype == LUA_TSTRING) {
-		data = lua_tolstring(L, 1, &len);
-	} else if(ltype == LUA_TNUMBER) {
-		len = lua_tointeger(L, 1);
-	}
-
-	this = &buf;
-	l_buffer_init(this, data, len);
-
-  obj_type_LBuffer_push(L, this);
-  return 1;
-}
 
 /* method: free */
 static int LBuffer__free__meth(lua_State *L) {
@@ -2306,7 +2439,7 @@ static int LBuffer__free__meth(lua_State *L) {
 static int LBuffer____tostring__meth(lua_State *L) {
   LBuffer * this;
   size_t data_len = 0;
-  const char * data = NULL;
+  char * data = NULL;
   this = obj_type_LBuffer_check(L,1);
   data = l_buffer_data(this);
   data_len = l_buffer_length(this);
@@ -2318,7 +2451,7 @@ static int LBuffer____tostring__meth(lua_State *L) {
 static int LBuffer__tostring__meth(lua_State *L) {
   LBuffer * this;
   size_t data_len = 0;
-  const char * data = NULL;
+  char * data = NULL;
   this = obj_type_LBuffer_check(L,1);
   data = l_buffer_data(this);
   data_len = l_buffer_length(this);
@@ -2336,6 +2469,16 @@ static int LBuffer__reset__meth(lua_State *L) {
 
 /* method: length */
 static int LBuffer__length__meth(lua_State *L) {
+  LBuffer * this;
+  size_t size = 0;
+  this = obj_type_LBuffer_check(L,1);
+  size = l_buffer_length(this);
+  lua_pushinteger(L, size);
+  return 1;
+}
+
+/* method: __len */
+static int LBuffer____len__meth(lua_State *L) {
   LBuffer * this;
   size_t size = 0;
   this = obj_type_LBuffer_check(L,1);
@@ -2371,15 +2514,12 @@ static int LBuffer__sub__meth(lua_State *L) {
   LBuffer * this;
   size_t off;
   size_t len;
-  size_t data_len = 0;
   const char * data = NULL;
   this = obj_type_LBuffer_check(L,1);
   off = luaL_optinteger(L,2,0);
   len = luaL_optinteger(L,3,0);
-	data_len = len;
-	data = l_buffer_sub(this, off, &(data_len));
-
-  if(data == NULL) lua_pushnil(L);  else lua_pushlstring(L, data,data_len);
+  data = l_buffer_sub(this, off, &(len));
+  if(data == NULL) lua_pushnil(L);  else lua_pushlstring(L, data,len);
   return 1;
 }
 
@@ -2409,14 +2549,11 @@ static int LBuffer__resize__meth(lua_State *L) {
 static int LBuffer__read_data__meth(lua_State *L) {
   LBuffer * this;
   size_t len;
-  size_t data_len = 0;
   const char * data = NULL;
   this = obj_type_LBuffer_check(L,1);
   len = luaL_checkinteger(L,2);
-	data = l_buffer_read_data_len(this, len);
-	data_len = len;
-
-  if(data == NULL) lua_pushnil(L);  else lua_pushlstring(L, data,data_len);
+  data = l_buffer_read_data_len(this, len);
+  if(data == NULL) lua_pushnil(L);  else lua_pushlstring(L, data,len);
   return 1;
 }
 
@@ -2426,8 +2563,7 @@ static int LBuffer__read_string__meth(lua_State *L) {
   size_t str_len = 0;
   const char * str = NULL;
   this = obj_type_LBuffer_check(L,1);
-	str = l_buffer_read_string_len(this, &(str_len));
-
+  str = l_buffer_read_string_len(this, &(str_len));
   if(str == NULL) lua_pushnil(L);  else lua_pushlstring(L, str,str_len);
   return 1;
 }
@@ -2804,11 +2940,10 @@ static int LBuffer__append_b128_var64__meth(lua_State *L) {
 
 /* method: new */
 static int buf__new__func(lua_State *L) {
-  LBuffer this_store;
-  LBuffer * this = &(this_store);
-	LBuffer buf;
-	const uint8_t *data = NULL;
-	size_t len = 0;
+  LBuffer buf_store;
+  LBuffer * buf = &(buf_store);
+  const uint8_t * data = NULL;
+  size_t len = 0;
 	int ltype = lua_type(L, 1);
 
 	if(ltype == LUA_TSTRING) {
@@ -2817,17 +2952,14 @@ static int buf__new__func(lua_State *L) {
 		len = lua_tointeger(L, 1);
 	}
 
-	this = &buf;
-	l_buffer_init(this, data, len);
-
-  obj_type_LBuffer_push(L, this);
+  l_buffer_init(buf, data, len);
+  obj_type_LBuffer_push(L, buf);
   return 1;
 }
 
 
 
 static const luaL_Reg obj_LBuffer_pub_funcs[] = {
-  {"new", LBuffer__new__meth},
   {NULL, NULL}
 };
 
@@ -2879,6 +3011,7 @@ static const luaL_Reg obj_LBuffer_methods[] = {
 static const luaL_Reg obj_LBuffer_metas[] = {
   {"__gc", LBuffer__free__meth},
   {"__tostring", LBuffer____tostring__meth},
+  {"__len", LBuffer____len__meth},
   {"__eq", obj_simple_udata_default_equal},
   {NULL, NULL}
 };
@@ -2896,6 +3029,10 @@ static const obj_const obj_LBuffer_constants[] = {
 };
 
 static const reg_impl obj_LBuffer_implements[] = {
+  { "BufferIF", &(LBuffer_Buffer) },
+
+  { "MutableBufferIF", &(LBuffer_MutableBuffer) },
+
   {NULL, NULL}
 };
 

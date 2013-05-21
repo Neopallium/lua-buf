@@ -14,11 +14,7 @@ subfiles {
 
 c_function "new" {
 	var_in{ "<any>", "size_or_data"},
-	var_out{ "!LBuffer *", "this" },
 	c_source[[
-	LBuffer buf;
-	const uint8_t *data = NULL;
-	size_t len = 0;
 	int ltype = lua_type(L, ${size_or_data::idx});
 
 	if(ltype == LUA_TSTRING) {
@@ -26,10 +22,18 @@ c_function "new" {
 	} else if(ltype == LUA_TNUMBER) {
 		len = lua_tointeger(L, ${size_or_data::idx});
 	}
-
-	${this} = &buf;
-	l_buffer_init(${this}, data, len);
 ]],
+	ffi_source[[
+	local ltype = type(${size_or_data})
+
+	if ltype == 'string' then
+		data = ${size_or_data}
+		len = #data
+	elseif ltype == 'number' then
+		len = ${size_or_data}
+	end
+]],
+	c_call "void" "l_buffer_init" { "!LBuffer *", "buf>1", "const uint8_t *", "(data)", "size_t", "(len)" }
 },
 }
 

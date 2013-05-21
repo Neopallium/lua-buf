@@ -52,59 +52,16 @@ struct LBuffer {
 	uint32_t  _free_struct: 1;  /**< Should the LBuffer struct be freed. */
 };
 
-uint8_t *l_buffer_sub(LBuffer *buf, size_t off, size_t *plen);
-
-const uint8_t *l_buffer_read_data_len(LBuffer *buf, size_t len);
-
-const char *l_buffer_read_string_len(LBuffer *buf, size_t *plen);
-
 ]],
-		ffi_source[[
-local LBuffer_tmp = ffi.new("LBuffer")
-]],
-	constructor {
-		var_in{ "<any>", "size_or_data"},
-		c_source[[
-	LBuffer buf;
-	const uint8_t *data = NULL;
-	size_t len = 0;
-	int ltype = lua_type(L, ${size_or_data::idx});
-
-	if(ltype == LUA_TSTRING) {
-		data = lua_tolstring(L, ${size_or_data::idx}, &len);
-	} else if(ltype == LUA_TNUMBER) {
-		len = lua_tointeger(L, ${size_or_data::idx});
-	}
-
-	${this} = &buf;
-	l_buffer_init(${this}, data, len);
-]],
-		ffi_source[[
-	local buf
-	local data
-	local len
-	local ltype = type(${size_or_data})
-
-	if ltype == 'string' then
-		data = ${size_or_data}
-		len = #data
-	elseif ltype == 'number' then
-		len = ${size_or_data}
-	end
-
-	${this} = LBuffer_tmp
-	C.l_buffer_init(${this}, data, len)
-]],
-	},
 	destructor "free" {
 		c_method_call "void" "l_buffer_free" {}
 	},
 	method "__tostring" {
-		c_method_call { "const char *", "data" } "l_buffer_data" {},
+		c_method_call { "char *", "data" } "l_buffer_data" {},
 		c_method_call { "size_t", "#data" } "l_buffer_length" {}
 	},
 	method "tostring" {
-		c_method_call { "const char *", "data" } "l_buffer_data" {},
+		c_method_call { "char *", "data" } "l_buffer_data" {},
 		c_method_call { "size_t", "#data" } "l_buffer_length" {}
 	},
 
@@ -123,22 +80,9 @@ local LBuffer_tmp = ffi.new("LBuffer")
 	method "data_ptr" {
 		c_method_call "void *" "l_buffer_data" {}
 	},
-	ffi_source[[
-local sub_len_tmp = ffi.new("size_t[1]")
-]],
 	method "sub" {
-		var_in{ "size_t", "off?", default = 0 },
-		var_in{ "size_t", "len?", default = 0 },
-		var_out{ "const char *", "data", has_length = true },
-		c_source[[
-	${data_len} = ${len};
-	${data} = l_buffer_sub(${this}, ${off}, &(${data_len}));
-]],
-		ffi_source[[
-	sub_len_tmp[0] = ${len};
-	${data} = C.l_buffer_sub(${this}, ${off}, sub_len_tmp);
-	${data_len} = sub_len_tmp[0];
-]],
+		c_method_call { "const char *", "data", length = "len" }
+			"l_buffer_sub" { "size_t", "off?", "size_t" , "&len?" },
 	},
 	method "size" {
 		c_method_call { "size_t", "size", ffi_wrap = "tonumber" } "l_buffer_size" {}
@@ -149,30 +93,12 @@ local sub_len_tmp = ffi.new("size_t[1]")
 
 	--[[ Read methods. ]]
 	method "read_data" {
-		var_in{ "size_t", "len" },
-		var_out{ "const char *", "data", has_length = true },
-		c_source[[
-	${data} = l_buffer_read_data_len(${this}, ${len});
-	${data_len} = ${len};
-]],
-		ffi_source[[
-	${data} = C.l_buffer_read_data_len(${this}, ${len})
-	${data_len} = ${len}
-]],
+		c_method_call { "const char *", "data", length = "len" }
+			"l_buffer_read_data_len" { "size_t" , "len" },
 	},
-		ffi_source[[
-local read_string_len_tmp = ffi.new("size_t[1]")
-]],
 	method "read_string" {
-		var_out{ "const char *", "str", has_length = true },
-		c_source[[
-	${str} = l_buffer_read_string_len(${this}, &(${str_len}));
-]],
-		ffi_source[[
-	${str_len} = read_string_len_tmp
-	${str} = C.l_buffer_read_string_len(${this}, ${str_len})
-	${str_len} = ${str_len}[0]
-]],
+		c_method_call { "const char *", "str", has_length = true }
+			"l_buffer_read_string_len" { "size_t" , "&#str" },
 	},
 	method "read_uint8" {
 		c_method_call "int>2" "l_buffer_read_uint8_t" { "uint8_t", "&num>1" }
