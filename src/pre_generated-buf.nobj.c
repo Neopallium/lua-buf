@@ -20,12 +20,10 @@
 #define luaL_Reg luaL_reg
 #endif
 
-/* some Lua 5.1 compatibility support. */
-#if !defined(LUA_VERSION_NUM) || (LUA_VERSION_NUM == 501)
 /*
-** Adapted from Lua 5.2.0
+** Adapted from Lua 5.2.0 luaL_setfuncs.
 */
-static void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup) {
+static void nobj_setfuncs (lua_State *L, const luaL_Reg *l, int nup) {
   luaL_checkstack(L, nup, "too many upvalues");
   for (; l->name != NULL; l++) {  /* fill the table with given functions */
     int i;
@@ -38,6 +36,9 @@ static void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup) {
   lua_pop(L, nup);  /* remove upvalues */
 }
 
+/* some Lua 5.1 compatibility support. */
+#if !defined(LUA_VERSION_NUM) || (LUA_VERSION_NUM == 501)
+
 #define lua_load_no_mode(L, reader, data, source) \
 	lua_load(L, reader, data, source)
 
@@ -45,7 +46,7 @@ static void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup) {
 
 #endif
 
-#if LUA_VERSION_NUM == 502
+#if LUA_VERSION_NUM >= 502
 
 #define lua_load_no_mode(L, reader, data, source) \
 	lua_load(L, reader, data, source, NULL)
@@ -580,8 +581,8 @@ static void obj_type_register_implements(lua_State *L, const reg_impl *impls) {
 #define REG_MODULES_AS_GLOBALS 0
 #endif
 
-/* For Lua 5.2 don't register modules as globals. */
-#if LUA_VERSION_NUM == 502
+/* For Lua >=5.2 don't register modules as globals. */
+#if LUA_VERSION_NUM >= 502
 #undef REG_MODULES_AS_GLOBALS
 #define REG_MODULES_AS_GLOBALS 0
 #endif
@@ -1148,7 +1149,7 @@ static void obj_type_register_package(lua_State *L, const reg_sub_module *type_r
 	/* create public functions table. */
 	if(reg_list != NULL && reg_list[0].name != NULL) {
 		/* register functions */
-		luaL_setfuncs(L, reg_list, 0);
+		nobj_setfuncs(L, reg_list, 0);
 	}
 
 	obj_type_register_constants(L, type_reg->constants, -1, type_reg->bidirectional_consts);
@@ -1163,17 +1164,17 @@ static void obj_type_register_meta(lua_State *L, const reg_sub_module *type_reg)
 	reg_list = type_reg->pub_funcs;
 	if(reg_list != NULL && reg_list[0].name != NULL) {
 		/* register functions */
-		luaL_setfuncs(L, reg_list, 0);
+		nobj_setfuncs(L, reg_list, 0);
 	}
 
 	obj_type_register_constants(L, type_reg->constants, -1, type_reg->bidirectional_consts);
 
 	/* register methods. */
-	luaL_setfuncs(L, type_reg->methods, 0);
+	nobj_setfuncs(L, type_reg->methods, 0);
 
 	/* create metatable table. */
 	lua_newtable(L);
-	luaL_setfuncs(L, type_reg->metas, 0); /* fill metatable */
+	nobj_setfuncs(L, type_reg->metas, 0); /* fill metatable */
 	/* setmetatable on meta-object. */
 	lua_setmetatable(L, -2);
 
@@ -1198,7 +1199,7 @@ static void obj_type_register(lua_State *L, const reg_sub_module *type_reg, int 
 	reg_list = type_reg->pub_funcs;
 	if(reg_list != NULL && reg_list[0].name != NULL) {
 		/* register "constructors" as to object's public API */
-		luaL_setfuncs(L, reg_list, 0); /* fill public API table. */
+		nobj_setfuncs(L, reg_list, 0); /* fill public API table. */
 
 		/* make public API table callable as the default constructor. */
 		lua_newtable(L); /* create metatable */
@@ -1228,7 +1229,7 @@ static void obj_type_register(lua_State *L, const reg_sub_module *type_reg, int 
 #endif
 	}
 
-	luaL_setfuncs(L, type_reg->methods, 0); /* fill methods table. */
+	nobj_setfuncs(L, type_reg->methods, 0); /* fill methods table. */
 
 	luaL_newmetatable(L, type->name); /* create metatable */
 	lua_pushliteral(L, ".name");
@@ -1246,7 +1247,7 @@ static void obj_type_register(lua_State *L, const reg_sub_module *type_reg, int 
 	lua_pushvalue(L, -2); /* dup metatable. */
 	lua_rawset(L, priv_table);    /* priv_table["<object_name>"] = metatable */
 
-	luaL_setfuncs(L, type_reg->metas, 0); /* fill metatable */
+	nobj_setfuncs(L, type_reg->metas, 0); /* fill metatable */
 
 	/* add obj_bases to metatable. */
 	while(base->id >= 0) {
@@ -1349,31 +1350,6 @@ static FUNC_UNUSED void *nobj_delete_callback_state(lua_State *L, int owner_idx)
 
 
 
-typedef struct Buffer_if {
-  const uint8_t * (* const const_data)(void *this_v);
-  size_t (* const get_size)(void *this_v);
-} BufferIF;
-
-/* a per-module unique pointer for fast lookup of an interface's implementation table. */
-static char obj_interface_BufferIF[] = "BufferIF";
-
-#define BufferIF_VAR(var_name) \
-	BufferIF *var_name ## _if; \
-	void *var_name;
-
-#define BufferIF_LUA_OPTIONAL(L, _index, var_name) \
-	var_name = obj_implement_luaoptional(L, _index, (void **)&(var_name ## _if), \
-		obj_interface_BufferIF)
-
-#define BufferIF_LUA_CHECK(L, _index, var_name) \
-	var_name = obj_implement_luacheck(L, _index, (void **)&(var_name ## _if), \
-		obj_interface_BufferIF)
-
-
-
-
-
-
 typedef struct MutableBuffer_if {
   uint8_t * (* const data)(void *this_v);
   size_t (* const get_size)(void *this_v);
@@ -1397,9 +1373,34 @@ static char obj_interface_MutableBufferIF[] = "MutableBufferIF";
 
 
 
+
+
+typedef struct Buffer_if {
+  const uint8_t * (* const const_data)(void *this_v);
+  size_t (* const get_size)(void *this_v);
+} BufferIF;
+
+/* a per-module unique pointer for fast lookup of an interface's implementation table. */
+static char obj_interface_BufferIF[] = "BufferIF";
+
+#define BufferIF_VAR(var_name) \
+	BufferIF *var_name ## _if; \
+	void *var_name;
+
+#define BufferIF_LUA_OPTIONAL(L, _index, var_name) \
+	var_name = obj_implement_luaoptional(L, _index, (void **)&(var_name ## _if), \
+		obj_interface_BufferIF)
+
+#define BufferIF_LUA_CHECK(L, _index, var_name) \
+	var_name = obj_implement_luacheck(L, _index, (void **)&(var_name ## _if), \
+		obj_interface_BufferIF)
+
+
+
+
 static char *obj_interfaces[] = {
-  obj_interface_BufferIF,
   obj_interface_MutableBufferIF,
+  obj_interface_BufferIF,
   NULL,
 };
 
@@ -1474,19 +1475,7 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "	return assert(ffi_safe_load(name, global))\n"
 "end\n"
 "\n"
-"local function ffi_string(ptr)\n"
-"	if ptr ~= nil then\n"
-"		return ffi.string(ptr)\n"
-"	end\n"
-"	return nil\n"
-"end\n"
-"\n"
-"local function ffi_string_len(ptr, len)\n"
-"	if ptr ~= nil then\n"
-"		return ffi.string(ptr, len)\n"
-"	end\n"
-"	return nil\n"
-"end\n"
+"local ffi_string = ffi.string\n"
 "\n"
 "local f_cast = ffi.cast\n"
 "local pcall = pcall\n"
@@ -1521,7 +1510,7 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "		local dir_sep = p_config:sub(1,1)\n"
 "		local path_sep = p_config:sub(3,3)\n"
 "		local path_mark = p_config:sub(5,5)\n"
-"		local path_match = \"([^\" .. path_sep .. \"]*)\" .. path_sep\n"
+"		local path_match = \"([^\" .. path_sep .. \"]+)\"\n"
 "		-- convert dotted name to directory path.\n"
 "		name = name:gsub('%.', dir_sep)\n"
 "		-- try each path in search path.\n"
@@ -1617,13 +1606,6 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "	end\n"
 "end\n"
 "\n"
-"ffi_safe_cdef(\"BufferIF\", [[\n"
-"typedef struct Buffer_if {\n"
-"  const uint8_t * (* const const_data)(void *this_v);\n"
-"  size_t (* const get_size)(void *this_v);\n"
-"} BufferIF;\n"
-"]])\n"
-"\n"
 "ffi_safe_cdef(\"FDIF\", [[\n"
 "typedef struct FD_if {\n"
 "  int (* const get_fd)(void *this_v);\n"
@@ -1636,6 +1618,13 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "  uint8_t * (* const data)(void *this_v);\n"
 "  size_t (* const get_size)(void *this_v);\n"
 "} MutableBufferIF;\n"
+"]])\n"
+"\n"
+"ffi_safe_cdef(\"BufferIF\", [[\n"
+"typedef struct Buffer_if {\n"
+"  const uint8_t * (* const const_data)(void *this_v);\n"
+"  size_t (* const get_size)(void *this_v);\n"
+"} BufferIF;\n"
 "]])\n"
 "\n"
 "local Cmod = ffi_load_cmodule(\"buf\", false)\n"
@@ -1905,14 +1894,14 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "end\n"
 "\n"
 "\n"
-"local obj_type_Buffer_check =\n"
-"	obj_get_interface_check(\"BufferIF\", \"Expected object with Buffer interface\")\n"
-"\n"
 "local obj_type_FD_check =\n"
 "	obj_get_interface_check(\"FDIF\", \"Expected object with FD interface\")\n"
 "\n"
 "local obj_type_MutableBuffer_check =\n"
 "	obj_get_interface_check(\"MutableBufferIF\", \"Expected object with MutableBuffer interface\")\n"
+"\n"
+"local obj_type_Buffer_check =\n"
+"	obj_get_interface_check(\"BufferIF\", \"Expected object with Buffer interface\")\n"
 "\n"
 "\n"
 "-- Start \"LBuffer\" FFI interface\n"
@@ -1932,7 +1921,7 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "  local data\n"
 "  data = C.l_buffer_data(self)\n"
 "  data_len = C.l_buffer_length(self)\n"
-"  return ffi_string_len(data,data_len)\n"
+"  return data ~= nil and ffi_string(data,data_len) or nil\n"
 "end\n"
 "\n"
 "-- method: tostring\n"
@@ -1942,7 +1931,7 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "  local data\n"
 "  data = C.l_buffer_data(self)\n"
 "  data_len = C.l_buffer_length(self)\n"
-"  return ffi_string_len(data,data_len)\n"
+"  return data ~= nil and ffi_string(data,data_len) or nil\n"
 "end\n"
 "\n"
 "-- method: reset\n"
@@ -1997,7 +1986,7 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "  sub_len_tmp[0] = len\n"
 "  data = C.l_buffer_sub(self, off, sub_len_tmp)\n"
 "  len = sub_len_tmp[0]\n"
-"  return ffi_string_len(data,len)\n"
+"  return data ~= nil and ffi_string(data,len) or nil\n"
 "end\n"
 "end\n"
 "\n"
@@ -2024,20 +2013,20 @@ static const char *buf_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "  \n"
 "  local data\n"
 "  data = C.l_buffer_read_data_len(self, len)\n"
-"  return ffi_string_len(data,len)\n"
+"  return data ~= nil and ffi_string(data,len) or nil\n"
 "end\n"
 "\n"
 "do\n"
-"  local read_string_str_tmp = ffi.new(\"size_t[1]\")\n"
+"  local read_string_str_len_tmp = ffi.new(\"size_t[1]\")\n"
 "\n"
 "-- method: read_string\n"
 "function _meth.LBuffer.read_string(self)\n"
-"  \n", /* ----- CUT ----- */
+"  \n"
 "  local str_len = 0\n"
 "  local str\n"
-"  str = C.l_buffer_read_string_len(self, read_string_str_tmp)\n"
-"  str_len = read_string_str_tmp[0]\n"
-"  return ffi_string_len(str,str_len)\n"
+"  str = C.l_buffer_read_string_len(self, read_string_str_len_tmp)\n"
+"  str_len = read_string_str_len_tmp[0]\n", /* ----- CUT ----- */
+"  return str ~= nil and ffi_string(str,str_len) or nil\n"
 "end\n"
 "end\n"
 "\n"
@@ -3113,7 +3102,7 @@ LUA_NOBJ_API int luaopen_buf(lua_State *L) {
 	luaL_register(L, "buf", buf_function);
 #else
 	lua_newtable(L);
-	luaL_setfuncs(L, buf_function, 0);
+	nobj_setfuncs(L, buf_function, 0);
 #endif
 
 	/* register module constants. */

@@ -5,11 +5,6 @@ lua-buf
 
 Mutable buffer object.
 
-TODO
-----
-
-* Export `lua_push*`/`lua_to*` style interface for other C modules to use.  This will allow I/O modules to work directly with LBuffers.
-
 Installing
 ----------
 
