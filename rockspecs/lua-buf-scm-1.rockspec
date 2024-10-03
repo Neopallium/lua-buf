@@ -1,7 +1,7 @@
 #!/usr/bin/env lua
 
 package	= 'lua-buf'
-version	= 'scm-0'
+version	= 'scm-1'
 source	= {
 	url	= 'git://github.com/Neopallium/lua-buf.git'
 }

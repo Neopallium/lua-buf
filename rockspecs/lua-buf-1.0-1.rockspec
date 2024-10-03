@@ -1,9 +1,10 @@
 #!/usr/bin/env lua
 
 package	= 'lua-buf'
-version	= 'scm-0'
+version	= '1.0-1'
 source	= {
-	url	= 'git://github.com/Neopallium/lua-buf.git'
+	url	= 'git://github.com/Neopallium/lua-buf.git',
+  branch = "v1.0",
 }
 description	= {
 	summary	= "Mutable buffer object.",
